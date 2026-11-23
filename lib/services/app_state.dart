@@ -1,0 +1,136 @@
+import 'package:flutter/foundation.dart';
+
+import '../models.dart';
+import '../protocol/huawei_api.dart';
+import 'audio_controller.dart';
+
+/// 全局状态：零第三方状态管理，直接用 ChangeNotifier + AnimatedBuilder。
+class AppState extends ChangeNotifier {
+  AppState() {
+    audio.addListener(notifyListeners);
+  }
+
+  final HuaweiAPI api = HuaweiAPI();
+  late final MuyuAudioController audio = MuyuAudioController(api);
+
+  int tab = 0;
+  bool loading = false;
+  String? error;
+  bool showLyrics = false;
+  bool darkMode = false;
+  int homePage = 1;
+
+  List<Song> homeSongs = <Song>[];
+  List<Song> searchResults = <Song>[];
+  List<Song> favorites = <Song>[];
+  List<Playlist> playlists = <Playlist>[];
+  List<Playlist> charts = <Playlist>[];
+  List<LyricLine> lyrics = <LyricLine>[];
+  String searchKeyword = '';
+
+  bool get isLoggedIn => api.isLoggedIn;
+
+  Future<void> loadHome() async {
+    await _guard(() async {
+      homeSongs = await api.homeSongs();
+      try {
+        charts = await api.charts();
+      } catch (_) {
+        charts = <Playlist>[];
+      }
+    });
+  }
+
+  Future<void> loadLibrary() async {
+    await _guard(() async {
+      favorites = await api.favorites();
+      try {
+        playlists = await api.playlists();
+      } catch (_) {
+        playlists = <Playlist>[];
+      }
+    });
+  }
+
+  Future<void> doSearch(String keyword) async {
+    searchKeyword = keyword.trim();
+    if (searchKeyword.isEmpty) {
+      searchResults = <Song>[];
+      notifyListeners();
+      return;
+    }
+    await _guard(() async {
+      searchResults = await api.search(searchKeyword);
+      tab = 1;
+    });
+  }
+
+  Future<void> showLyricsFor(Song song) async {
+    showLyrics = true;
+    notifyListeners();
+    try {
+      lyrics = await api.lyrics(song.id);
+    } catch (_) {
+      lyrics = <LyricLine>[];
+    }
+    notifyListeners();
+  }
+
+  Future<void> play(Song song, {List<Song>? queue}) async {
+    await audio.playSong(song, list: queue);
+    if (audio.error != null) error = audio.error;
+    notifyListeners();
+  }
+
+  /// 供 UI 在修改局部状态后请求重建（避免外部直接调用受保护的 notifyListeners）
+  void refresh() => notifyListeners();
+
+  void selectTab(int i) {
+    tab = i;
+    showLyrics = false;
+    notifyListeners();
+    if (i == 0 && homeSongs.isEmpty) loadHome();
+    if (i == 3 && favorites.isEmpty && playlists.isEmpty) loadLibrary();
+  }
+
+  void toggleTheme() {
+    darkMode = !darkMode;
+    notifyListeners();
+  }
+
+  void signInWithToken(String token) {
+    api.signInWithToken(token);
+    notifyListeners();
+    loadHome();
+  }
+
+  void signOut() {
+    api.signOut();
+    homeSongs = <Song>[];
+    favorites = <Song>[];
+    playlists = <Playlist>[];
+    notifyListeners();
+  }
+
+  Future<void> _guard(Future<void> Function() work) async {
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      await work();
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    audio.removeListener(notifyListeners);
+    audio.dispose();
+    api.gateway.dispose();
+    super.dispose();
+  }
+}
