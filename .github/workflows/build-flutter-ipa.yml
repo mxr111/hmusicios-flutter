@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# 显式并发组：避免新提交 / 手动触发把仍在排队的编译任务自动取消
+concurrency:
+  group: flutter-ipa-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Dart 静态分析与协议回归测试
@@ -21,8 +26,7 @@ jobs:
 
   build-ipa:
     name: macOS 云端编译未签名 IPA
-    needs: verify
-    # macos-15 池可能长时间排队；macos-14 同样自带 Xcode + iphoneos SDK
+    # 与 verify 并行：queued 的 macOS job 不应等 Linux job 完成才创建
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +35,8 @@ jobs:
           channel: stable
           flutter-version: '3.47.5'
       - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
 
       - name: 编译未签名 App（产出 xcarchive）
         run: |
