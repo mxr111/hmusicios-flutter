@@ -92,7 +92,7 @@ flutter build apk --release     # Android（需 Android SDK）
 flutter build ipa --no-codesign # 仅 macOS + Xcode
 ```
 
-**Windows 不能编译 iOS IPA**（Apple 工具链限制）。已配 `.github/workflows/build-flutter-ipa.yml`：push 到 `main` 后由 `macos-15` runner 执行 `flutter analyze` → `flutter test` → `flutter build ipa --release --no-codesign`（Flutter 3.47 只产出 `Runner.xcarchive` 并跳过 IPA）→ 从 xcarchive 里的 `.app` 打包未签名 IPA，上传 `MuyuFlutter-unsigned-ipa` 产物，自签后装到 iPad。
+**Windows 不能编译 iOS IPA**（Apple 工具链限制）。已配 `.github/workflows/build-flutter-ipa.yml`：push 到 `main` 后由 macOS runner（`macos-14`，避开 `macos-15` 池排队）执行 `flutter analyze` → `flutter test` → `flutter build ipa --release --no-codesign`（Flutter 3.47 只产出 `Runner.xcarchive` 并跳过 IPA）→ 从 xcarchive 里的 `.app` 打包未签名 IPA，上传 `MuyuFlutter-unsigned-ipa` 产物，自签后装到 iPad。
 
 ## 七、已知缺口
 
