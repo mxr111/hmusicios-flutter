@@ -58,16 +58,16 @@ class _DiscoverPageState extends State<DiscoverPage> {
         const SizedBox(height: 16),
         _categories(pal),
         const SizedBox(height: 24),
-        _sectionTitle('我的歌单', d.playlists.isEmpty ? '登录后可见' : '共 ${d.playlists.length} 个', pal),
+        _sectionTitle('推荐歌单', d.playlists.isEmpty ? '暂无数据' : '共 ${d.playlists.length} 个', pal),
         const SizedBox(height: 12),
         d.playlists.isEmpty
-            ? _empty('登录后可见歌单', pal)
+            ? _empty('发现页接口未返回歌单', pal)
             : _playlistGrid(d.playlists, pal),
         const SizedBox(height: 24),
-        _sectionTitle('最近播放', d.newSongs.isEmpty ? '暂无数据' : '共 ${d.newSongs.length} 首', pal),
+        _sectionTitle('新歌速递', d.newSongs.isEmpty ? '暂无数据' : '共 ${d.newSongs.length} 首', pal),
         const SizedBox(height: 8),
         d.newSongs.isEmpty
-            ? _empty('暂无最近播放，登录后自动同步', pal)
+            ? _empty('发现页接口未返回歌曲', pal)
             : _horizontalSongs(d.newSongs.take(8).toList(), pal),
         const SizedBox(height: 22),
         _sectionTitle('排行榜', d.charts.isEmpty ? '暂无数据' : '点击榜单加载歌曲', pal),
@@ -75,6 +75,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
         d.charts.isEmpty
             ? _empty('榜单接口未返回数据', pal)
             : _chartGrid(d.charts, pal),
+        const SizedBox(height: 24),
+        _sectionTitle('心动电台', d.radio.isEmpty ? '暂无数据' : '私人漫游', pal),
+        const SizedBox(height: 8),
+        d.radio.isEmpty
+            ? _empty('电台接口未返回数据', pal)
+            : _horizontalSongs(d.radio.take(10).toList(), pal),
         if (widget.state.activeChartId != null) ...<Widget>[
           const SizedBox(height: 12),
           _sectionTitle('榜单歌曲', widget.state.chartSongs.isEmpty ? '暂无数据' : '共 ${widget.state.chartSongs.length} 首', pal),

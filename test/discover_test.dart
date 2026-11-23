@@ -37,6 +37,52 @@ void main() {
     expect(fake, isEmpty);
   });
 
+  test('沐语 columnInfoExs 三层结构：pmf001 → childSimpleInfos → listRcmInfos', () {
+    final d = HuaweiAPI.parseDiscover(<String, dynamic>{
+      'result': <String, dynamic>{
+        'columnInfoExs': <dynamic>[
+          <String, dynamic>{
+            'columnID': 'home',
+            'contentSimpleInfos': <dynamic>[
+              <String, dynamic>{
+                'contentID': 'pmf001',
+                'childSimpleInfos': <dynamic>[
+                  <String, dynamic>{
+                    'listRcmInfos': <dynamic>[
+                      <String, dynamic>{
+                        'ID': 'radio-real-1',
+                        'NM': '真实电台歌曲',
+                        'pic': 'https://contentcenter-drcn.dbankcdn.cn/img/r.jpg',
+                      },
+                    ],
+                  },
+                ],
+              },
+              <String, dynamic>{
+                'contentID': 'new-songs',
+                'songSimpleInfos': <dynamic>[
+                  <String, dynamic>{
+                    'contentID': 'song-real-1',
+                    'contentName': '真实新歌',
+                    'middleImgURL': 'https://contentcenter-drcn.dbankcdn.cn/img/s.jpg',
+                    'durationSeconds': 210,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(d.radio.length, 1);
+    expect(d.radio.first.id, 'radio-real-1');
+    expect(d.radio.first.name, '真实电台歌曲');
+    expect(d.newSongs.length, 1);
+    expect(d.newSongs.first.id, 'song-real-1');
+    expect(d.newSongs.first.name, '真实新歌');
+    expect(d.newSongs.first.durationMs, 210000);
+  });
+
   test('空 DiscoverData 表示接口没有返回，不含占位内容', () {
     const d = DiscoverData();
     expect(d.banners, isEmpty);

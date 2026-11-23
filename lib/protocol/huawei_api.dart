@@ -75,12 +75,12 @@ class HuaweiAPI {
     displayName = null;
   }
 
-  /// 首页歌曲 = 最近播放（音源插件 History 接口真实支持）；
-  /// 没有历史时退回收藏。不再调用沐语私有的 page/detail/all。
+  /// 首页歌曲：沐语真实链路 = page/detail/all 的 columnInfoExs 三层结构。
+  /// REA 反编译 MusicHomePage(0x1404224e0) 确认：
+  ///   columnInfoExs → contentSimpleInfos → childSimpleInfos → listRcmInfos
+  /// 逐板块容错；首页请求失败时只在调用方显示空状态，不拿假数据填充。
   Future<List<Song>> homeSongs() async {
-    final recent = await history();
-    if (recent.isNotEmpty) return recent;
-    return favorites(limit: 30);
+    return discover().then((d) => d.newSongs);
   }
 
   /// GET /recentlyplayed/query?contentType=1（音源插件 collections.go History）。
@@ -366,8 +366,9 @@ class HuaweiAPI {
 
   static Song parseSong(Map<String, dynamic> d) {
     final artists = <String>[];
-    final single = HuaweiGateway.firstString(d,
-        const ['singerName', 'artistName', 'singer', 'artist']);
+    final single = HuaweiGateway.firstString(d, const [
+      'singerName', 'artistName', 'artNM', 'artist', 'singer'
+    ]);
     if (single != null) {
       artists.addAll(single
           .split(RegExp(r'[/,、&]'))
@@ -395,24 +396,29 @@ class HuaweiAPI {
     if (tier != null) qualities.add(AudioQuality.fromCode(tier));
 
     return Song(
+      // 沐语 normalizeHomeSongs 兼容两套字段：精简 ID/NM/pic 与完整 contentID/contentName/middleImgURL。
       id: HuaweiGateway.firstString(d, const [
-            'songCode', 'contentId', 'contentCode', 'id', 'songId'
+            'songCode', 'contentId', 'contentID', 'contentCode', 'ID', 'id', 'songId'
           ]) ??
           DateTime.now().microsecondsSinceEpoch.toString(),
       name: HuaweiGateway.firstString(d, const [
-            'songName', 'name', 'songname', 'contentName', 'title'
+            'songName', 'name', 'songname', 'contentName', 'NM', 'title'
           ]) ??
           '未知歌曲',
-      album: HuaweiGateway.firstString(d,
-              const ['albumName', 'album', 'albumname']) ??
+      album: HuaweiGateway.firstString(d, const [
+              'albumName', 'albNM', 'album', 'albumname']) ??
           '',
       artists: artists,
       cover: HuaweiGateway.firstUrl(d, const [
-        'middleImgURL', 'bigImgURL', 'smallImgURL', 'coverUrl', 'cover'
+        'middleImgURL', 'bigImgURL', 'smallImgURL', 'mImg', 'bImg', 'sImg',
+        'pic', 'picture', 'coverUrl', 'cover'
       ]),
-      durationMs: HuaweiGateway.firstInt(d,
-              const ['songDuration', 'duration', 'playDuration']) ??
-          0,
+      // durationSeconds 以秒计（REA 实测字段），其余为毫秒。
+      durationMs: HuaweiGateway.firstInt(d, const ['durationSeconds']) != null
+          ? HuaweiGateway.firstInt(d, const ['durationSeconds'])! * 1000
+          : HuaweiGateway.firstInt(d, const [
+                  'songDuration', 'durationMs', 'duration', 'dur', 'playDuration']) ??
+              0,
       qualities: qualities,
       lyricUrl: HuaweiGateway.firstUrl(d,
           const ['lyricAddress', 'lyricUrl', 'lrcUrl']),
@@ -561,37 +567,161 @@ class HuaweiAPI {
     return words;
   }
 
-  /// 首页数据：只用音源插件真实支持的接口（最近播放 + 歌单发现）。
-  /// 沐语私有的 page/detail/all / querydaily / privatefm 不在本音源内，
-  /// 不再调用；无数据即空状态，不填假内容。
+  /// 首页数据：沐语 page/detail/all 的 columnInfoExs 三层结构。
+  /// REA decompile(MusicHomePage@0x1404224e0) 实测：
+  ///   columnInfoExs → contentSimpleInfos → contentID=pmf001
+  ///     → childSimpleInfos → listRcmInfos（电台歌曲）
+  /// 其余 column 按 contentID/contentType 分流为新歌 / 歌单 / 榜单 / Banner。
+  /// 每个板块独立容错；接口无数据即空状态，绝不填假内容。
   Future<DiscoverData> discover() async {
-    final lists = await playlists();
-    final songs = await homeSongs();
+    final json = await gateway.request(HuaweiPaths.home);
+    return parseDiscover(json);
+  }
+
+  /// 每日推荐：请求体来自运行中 Muyu.exe 堆内真实 JSON。
+  Future<List<Song>> dailySongs() async {
+    final json = await gateway.request(HuaweiPaths.daily,
+        body: const <String, dynamic>{
+          'rcmScenario': '1',
+          'termType': '1',
+          'scenario': '1',
+          'recommendStrategy': '0',
+        });
+    return deepList(json, const [
+      'dailySongs', 'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+    ]).map(parseSong).toList();
+  }
+
+  /// 私人电台：请求体字段来自 REA decompile(applicationRequest@0x1404225c0)。
+  /// cadence / rcmMode / rcmScenario / refInfo；rcmMode 仅接受 '1'/'2'/'3'。
+  Future<List<Song>> privateRadio({String mode = '1'}) async {
+    final json = await gateway.request(HuaweiPaths.privateFm,
+        body: <String, dynamic>{
+          'cadence': '',
+          'rcmMode': mode,
+          'rcmScenario': '16',
+          'refInfo': <dynamic>[],
+        });
+    return deepList(json, const [
+      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+    ]).map(parseSong).toList();
+  }
+
+  /// 推荐歌单：沐语 /recommend/playlist。
+  Future<List<Playlist>> recommendedPlaylists() async {
+    final json = await gateway.request(HuaweiPaths.recommendPlaylist,
+        body: const <String, dynamic>{
+          'contentType': 1,
+          'start': 0,
+          'limit': 30,
+        });
+    return deepList(json, const [
+      'playListInfos', 'playlistInfos', 'contentSimpleInfos', 'songList',
+      'list', 'data'
+    ]).map(parsePlaylist).toList();
+  }
+
+  /// 榜单歌曲：chartID / chartCode 来自 REA 符号与堆字段。
+  Future<List<Song>> chartSongs(String chartId) async {
+    final json = await gateway.request(HuaweiPaths.chartDetail,
+        body: <String, dynamic>{
+          'chartID': chartId,
+          'chartCode': chartId,
+          'contentType': 1,
+          'start': 0,
+          'limit': 50,
+        });
+    return deepList(json, const [
+      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+    ]).map(parseSong).toList();
+  }
+
+  /// 解析沐语首页 JSON。列名全部由 REA 反编译给出的字符串常量实测，不是猜测。
+  static DiscoverData parseDiscover(dynamic root) {
+    final columns = deepList(root, const ['columnInfoExs']);
+    final songs = <Song>[];
+    final playlists = <Playlist>[];
+    final charts = <Playlist>[];
+    final radio = <Song>[];
+    final banners = <DiscoverBanner>[];
+
+    for (final column in columns) {
+      final contents = deepList(column, const ['contentSimpleInfos']);
+      final columnId = HuaweiGateway.firstString(column,
+              const ['columnID', 'columnId', 'contentID']) ??
+          '';
+      for (final content in contents) {
+        final cid = HuaweiGateway.firstString(content,
+                const ['contentID', 'contentCode', 'ID']) ??
+            '';
+        // REA: contentID=pmf001 → childSimpleInfos → listRcmInfos（电台推荐）
+        if (cid == 'pmf001' || columnId == 'pmf001') {
+          final children = deepList(content, const ['childSimpleInfos']);
+          for (final child in children) {
+            final infos = deepList(child, const ['listRcmInfos']);
+            radio.addAll(infos.map(parseSong));
+          }
+          continue;
+        }
+        final nestedSongs = deepList(content, const [
+          'songSimpleInfos', 'listRcmInfos', 'contentSimpleInfos'
+        ]);
+        songs.addAll(nestedSongs.map(parseSong));
+        final nestedLists = deepList(content, const [
+          'playListInfos', 'recommendPlayListInfos', 'chartInfos'
+        ]);
+        for (final item in nestedLists) {
+          final p = parsePlaylist(item);
+          if (cid.contains('chart') || columnId.contains('chart') ||
+              p.id.startsWith('chart')) {
+            charts.add(p);
+          } else {
+            playlists.add(p);
+          }
+        }
+        final banner = _bannerFrom(content);
+        if (banner != null) banners.add(banner);
+      }
+    }
+
+    // 兜底：接口直接给出扁平数组（某些版本 page/detail/all 会这样返回）。
+    if (songs.isEmpty) {
+      songs.addAll(deepList(root, const [
+        'dailyRecInfos', 'newSongInfos', 'songSimpleInfos'
+      ]).map(parseSong));
+    }
+    for (final item in deepList(root, const ['chartInfos'])) {
+      charts.add(parsePlaylist(item));
+    }
+    for (final item in deepList(root, const ['playListInfos'])) {
+      playlists.add(parsePlaylist(item));
+    }
+    if (banners.isEmpty) banners.addAll(parseBanners(root));
+
     return DiscoverData(
-      banners: const <DiscoverBanner>[],
+      banners: banners.take(8).toList(),
       newSongs: songs,
-      playlists: lists.where((p) => p.kind != 'chart').toList(),
-      charts: lists.where((p) => p.kind == 'chart').toList(),
-      radio: const <Song>[],
+      playlists: playlists,
+      charts: charts,
+      radio: radio,
     );
   }
 
-  /// 兼容旧调用：音源不支持独立每日推荐，退回最近播放。
-  Future<List<Song>> dailySongs() => homeSongs();
-
-  /// 兼容旧调用：音源不支持私人电台，退回收藏。
-  Future<List<Song>> privateRadio() => favorites(limit: 30);
-
-  /// 兼容旧调用：推荐歌单即音源返回的歌单集合。
-  Future<List<Playlist>> recommendedPlaylists() => playlists();
-
-  /// 兼容旧调用：榜单按 id 找到对应 type=7 歌单后读歌曲。
-  Future<List<Song>> chartSongs(String chartId) async {
-    final all = await playlists();
-    for (final p in all) {
-      if (p.id == chartId) return playlistSongs(p);
+  static DiscoverBanner? _bannerFrom(Map<String, dynamic> d) {
+    final url = HuaweiGateway.firstUrl(
+        d, const ['picture', 'bigImgURL', 'middleImgURL', 'imageUrl']);
+    final title = HuaweiGateway.firstString(
+        d, const ['contentName', 'title', 'name', 'subTitle']);
+    if (url == null || title == null || title.isEmpty || !_bannerImageAllowed(url)) {
+      return null;
     }
-    return <Song>[];
+    return DiscoverBanner(
+      title: title,
+      subtitle: HuaweiGateway.firstString(
+              d, const ['subTitle', 'description', 'summary']) ??
+          '',
+      imageUrl: url,
+    );
   }
 
   /// 榜单 / 歌单通用解析（字段名来自 REA：chartID / songNum / picture）。
