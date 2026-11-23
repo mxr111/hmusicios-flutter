@@ -1,6 +1,23 @@
 # 沐语 Flutter 复刻版（MuyuFlutter）
 
-基于 **REA 对 `C:\沐语\Muyu.exe`（沐语 v2.0.3 Windows 客户端）的静态逆向 + 运行时进程内存取证**，用 Flutter 重写其界面与「华为音乐」播放闭环。按需求**只接华为音乐一家数据源**。
+基于 **REA 对 `C:\沐语\Muyu.exe`（沐语 v2.0.3 Windows 客户端）的静态逆向 + 运行时进程内存取证**，并用同源项目 **tinglan（Go+Viva 华为音乐客户端，209 个 Go 源码文件）** 做源码级交叉校正，用 Flutter 重写其界面与「华为音乐」播放闭环。按需求**只接华为音乐一家数据源**。
+
+> 🔴 **v2 重大修正（2026-11-23）**：REA 反编译拿不到函数伪代码（本机无 Ghidra/IDA/Hopper/Kuna 引擎），但找到了同源项目 tinglan 的源码，纠正了此前两个致命错误：
+> 1. **鉴权不是 Bearer**，而是 `Authorization: Digest username=app-music-baseline, nonce=<随机>, created=<UTC>, token=<music token>`；且需三段式：OAuth 授权（域名 `oauth-login.platform.hicloud.com`）→ 换账号 AT → `loginex` 换音乐 token + snsUserID。这解释了此前真机接口不通的根因。
+> 2. **取流 qualityType 是 "1"(MP3)/"3"(FLAC)**，不是 h/sq/hr；主音频用顶层 `fileURL`。
+>
+> 详见工作区 `rea-muyu/TINGLAN_SOURCE_REFERENCE.md` 与 `rea-muyu/REA_DEEP_PLAYER_ANALYSIS.md`。
+
+### v2 新增界面
+
+| 页面 | 文件 | 依据 |
+| --- | --- | --- |
+| 华为音乐发现页（音乐厅） | `widgets/discover_page.dart` | REA 文案「音乐厅/排行榜/推荐歌单/新歌推荐/热歌速递/心动电台」；Banner 轮播 + 8 金刚区 + 推荐歌单 + 新歌 + 榜单 + 电台 |
+| 沉浸播放页（深色黑胶 + 逐字卡拉 OK） | `widgets/immersive_player.dart` | 运行时截图 `muyu_window2.png` + tinglan `stage.go`；封面模糊背景、焦点字号、已唱部分 smootherstep 推进 + 羽化、点击 seek |
+| 12 款主题 | `theme.dart` | tinglan `theme.go` 精确色值（晨光/晴海/鼠尾草/暖砂/蔷薇/冰川/午夜蓝/深林/石墨/夜玫瑰/咖啡/曜石） |
+| 歌词解析 | `protocol/huawei_api.dart` | tinglan `hmrc.go`/`lyrics.go`；HMRC 逐字 + LRC 行级 + 译文合并 |
+
+本机验证：`flutter analyze` → No issues found!；`flutter test` → **+8 全过**（含 Digest 头、HMRC、qualityType 回归）；`flutter build bundle` → 成功。
 
 ## 一、环境（本机已配置完成）
 

@@ -195,14 +195,26 @@ class _Backdrop extends StatelessWidget {
 
 /// 左侧封面（黑胶光盘效果）。
 class _CoverSide extends StatelessWidget {
-  const _CoverSide({required this.song, required this.pal, required this.spinning});
+  const _CoverSide({
+    required this.song,
+    required this.pal,
+    required this.spinning,
+    this.maxHeight,
+  });
   final Song? song;
   final MuyuPalette pal;
   final bool spinning;
 
+  /// 窄屏时由父级限制封面高度，避免 Column 溢出。
+  final double? maxHeight;
+
   @override
   Widget build(BuildContext context) {
-    final side = math.min(MediaQuery.of(context).size.height * 0.5, 420.0);
+    var side = math.min(MediaQuery.of(context).size.height * 0.5, 420.0);
+    if (maxHeight != null) {
+      // 文字区约需 90px，封面本体不超过剩余高度。
+      side = math.min(side, math.max(60.0, maxHeight! - 92));
+    }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -437,7 +449,18 @@ class _NarrowLyrics extends StatelessWidget {
       children: [
         SizedBox(
           height: 180,
-          child: _CoverSide(song: song, pal: pal, spinning: state.audio.playing),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SizedBox(
+              width: 320,
+              child: _CoverSide(
+                song: song,
+                pal: pal,
+                spinning: state.audio.playing,
+                maxHeight: 180,
+              ),
+            ),
+          ),
         ),
         Expanded(child: _LyricSide(state: state, pal: pal)),
       ],
