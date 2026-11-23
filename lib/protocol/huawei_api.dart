@@ -75,24 +75,20 @@ class HuaweiAPI {
     displayName = null;
   }
 
+  /// 首页歌曲 = 最近播放（音源插件 History 接口真实支持）；
+  /// 没有历史时退回收藏。不再调用沐语私有的 page/detail/all。
   Future<List<Song>> homeSongs() async {
-    final json = await gateway.request(HuaweiPaths.home, body: <String, dynamic>{
-      'pageType': 7,
-      'hasRecommend': 1,
-      'contentType': 1,
-    });
-    var raw = deepList(json, const [
-      'dailyRecInfos', 'songSimpleInfos', 'contentSimpleInfos', 'songs',
-      'songlist', 'list', 'recommendSongs'
-    ]);
-    if (raw.isEmpty) {
-      final daily = await gateway.request(HuaweiPaths.daily,
-          body: const <String, dynamic>{'contentType': 1});
-      raw = deepList(daily, const [
-        'dailyRecInfos', 'dailySongs', 'songSimpleInfos', 'songs', 'list'
-      ]);
-    }
-    return raw.map(parseSong).toList();
+    final recent = await history();
+    if (recent.isNotEmpty) return recent;
+    return favorites(limit: 30);
+  }
+
+  /// GET /recentlyplayed/query?contentType=1（音源插件 collections.go History）。
+  Future<List<Song>> history() async {
+    final json = await gateway.get(HuaweiPaths.recent);
+    return deepList(json, const [
+      'contentSimpleInfos', 'songSimpleInfos', 'songs', 'list', 'data'
+    ]).map(parseSong).toList();
   }
 
   Future<List<Song>> search(String keyword, {int start = 0, int limit = 20}) async {
@@ -110,25 +106,10 @@ class HuaweiAPI {
     ]).map(parseSong).toList();
   }
 
+  /// 榜单 = 收藏列表里 contentType=7 的条目（音源插件真实支持）。
   Future<List<Playlist>> charts() async {
-    final json = await gateway.request(HuaweiPaths.home,
-        body: const <String, dynamic>{'pageType': 7});
-    final raw = deepList(json, const ['chartInfos', 'charts', 'toplist']);
-    return raw.take(8).map((d) {
-      return Playlist(
-        id: HuaweiGateway.firstString(d,
-                const ['chartId', 'chartCode', 'id']) ??
-            DateTime.now().millisecondsSinceEpoch.toString(),
-        name: HuaweiGateway.firstString(d,
-                const ['chartName', 'name', 'title']) ??
-            '榜单',
-        cover: HuaweiGateway.firstUrl(d,
-            const ['middleImgURL', 'bigImgURL', 'cover']),
-        songCount: HuaweiGateway.firstInt(d,
-                const ['songNum', 'songCount', 'totalCount']) ??
-            0,
-      );
-    }).toList();
+    final all = await playlists();
+    return all.where((p) => p.kind == 'chart').take(8).toList();
   }
 
   Future<List<Song>> favorites({int start = 0, int limit = 50}) async {
@@ -146,33 +127,73 @@ class HuaweiAPI {
     ]).map(parseSong).toList();
   }
 
+  /// 歌单发现：favorite/simple/all + contentTypes=[4,5,7]（音源插件 collections.go）。
+  /// 4=收藏歌单 / 5=自建歌单 / 7=榜单。limit 先试 999，400 时退 50。
   Future<List<Playlist>> playlists() async {
-    final json = await gateway.request(HuaweiPaths.playlistDetail,
-        body: const <String, dynamic>{'contentType': 1});
-    return deepList(json, const [
-      'playListInfos', 'playlistInfos', 'playlists', 'list', 'data'
-    ]).map((d) {
+    final userId = gateway.session?.snsUserId ?? '';
+    Map<String, dynamic> json;
+    try {
+      json = await gateway.request(HuaweiPaths.playlistDetail,
+          body: <String, dynamic>{
+            'targetSnsUserID': userId,
+            'start': 0,
+            'limit': 999,
+            'contentTypes': <int>[4, 5, 7],
+          });
+    } catch (_) {
+      json = await gateway.request(HuaweiPaths.playlistDetail,
+          body: <String, dynamic>{
+            'targetSnsUserID': userId,
+            'start': 0,
+            'limit': 50,
+            'contentTypes': <int>[4, 5, 7],
+          });
+    }
+    return deepList(json, const ['favoriteInfos']).map((d) {
+      final kindCode = HuaweiGateway.firstInt(d, const ['contentType']) ?? 0;
+      final picture = d['picture'] is Map
+          ? Map<String, dynamic>.from(d['picture'] as Map)
+          : <String, dynamic>{};
       return Playlist(
         id: HuaweiGateway.firstString(d,
-                const ['playListID', 'musicListID', 'id']) ??
+                const ['contentID', 'playListID', 'id']) ??
             '',
         name: HuaweiGateway.firstString(d,
-                const ['playListName', 'musicListName', 'name']) ??
-            '歌单',
-        cover: HuaweiGateway.firstUrl(d,
-            const ['middleImgURL', 'bigImgURL', 'coverImgUrl']),
+                const ['contentName', 'playListName', 'name']) ??
+            '',
+        cover: HuaweiGateway.firstUrl(
+            picture, const ['bigImgURL', 'middleImgURL', 'smallImgURL']),
         songCount: HuaweiGateway.firstInt(d,
-                const ['songNum', 'songCount', 'totalCount']) ??
+                const ['totalCount', 'songNum', 'number']) ??
             0,
+        kind: const <int, String>{4: 'collected', 5: 'owned', 7: 'chart'}[kindCode] ?? '',
       );
-    }).toList();
+    }).where((p) => p.id.isNotEmpty && p.kind.isNotEmpty).toList();
   }
 
-  Future<List<Song>> playlistSongs(String playlistId) async {
-    final json = await gateway.request(HuaweiPaths.playlistSongs,
-        body: <String, dynamic>{'playListID': playlistId, 'contentType': 1});
+  /// 歌单歌曲：自建歌单用 GET detail/all，收藏歌单用 POST bymusiclistid。
+  Future<List<Song>> playlistSongs(Playlist playlist,
+      {int start = 0, int limit = 50}) async {
+    final Map<String, dynamic> json;
+    if (playlist.kind == 'owned') {
+      json = await gateway.get(
+        '${HuaweiPaths.ownedPlaylistSongs}?playListID=${Uri.encodeComponent(playlist.id)}'
+        '&start=$start&limit=$limit',
+      );
+    } else if (playlist.kind == 'collected') {
+      json = await gateway.request(HuaweiPaths.playlistSongs,
+          body: <String, dynamic>{
+            'musicListID': playlist.id,
+            'copyrightSwitch': '1',
+            'start': start,
+            'limit': '$limit',
+          });
+    } else {
+      return <Song>[];
+    }
     return deepList(json, const [
-      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+      'playListSongInfoList', 'songSimpleInfos',
+      'contentSimpleInfos', 'songs', 'list', 'data',
     ]).map(parseSong).toList();
   }
 
@@ -540,80 +561,37 @@ class HuaweiAPI {
     return words;
   }
 
-  /// 发现页：调用沐语真实首页接口，解析 banner / 新歌 / 推荐歌单 / 榜单。
-  /// 所有板块都只来自接口；接口没返回就是空列表，UI 显示空状态。
+  /// 首页数据：只用音源插件真实支持的接口（最近播放 + 歌单发现）。
+  /// 沐语私有的 page/detail/all / querydaily / privatefm 不在本音源内，
+  /// 不再调用；无数据即空状态，不填假内容。
   Future<DiscoverData> discover() async {
-    final json = await gateway.request(HuaweiPaths.home, body: <String, dynamic>{
-      'pageType': 7,
-      'hasRecommend': 1,
-      'contentType': 1,
-    });
+    final lists = await playlists();
+    final songs = await homeSongs();
     return DiscoverData(
-      banners: parseBanners(json),
-      newSongs: deepList(json, const [
-        'dailyRecInfos', 'newSongInfos', 'songSimpleInfos',
-        'contentSimpleInfos', 'songs', 'songlist', 'list',
-      ]).map(parseSong).toList(),
-      playlists: deepList(json, const [
-        'playListInfos', 'playlistInfos', 'recommendPlayListInfos',
-        'recommendLists', 'pgcSongListInfos', 'collections',
-        'recommendedCollections',
-      ]).map(parsePlaylist).toList(),
-      charts: deepList(json, const [
-        'chartInfos', 'charts', 'chartList', 'toplist',
-      ]).map(parsePlaylist).toList(),
+      banners: const <DiscoverBanner>[],
+      newSongs: songs,
+      playlists: lists.where((p) => p.kind != 'chart').toList(),
+      charts: lists.where((p) => p.kind == 'chart').toList(),
+      radio: const <Song>[],
     );
   }
 
-  /// 每日推荐：请求体来自运行中 Muyu.exe 堆内的真实 JSON。
-  Future<List<Song>> dailySongs() async {
-    final json = await gateway.request(HuaweiPaths.daily,
-        body: const <String, dynamic>{
-          'rcmScenario': '1',
-          'termType': '1',
-          'scenario': '1',
-          'recommendStrategy': '0',
-        });
-    return deepList(json, const [
-      'dailySongs', 'songSimpleInfos', 'songs', 'list', 'data',
-    ]).map(parseSong).toList();
-  }
+  /// 兼容旧调用：音源不支持独立每日推荐，退回最近播放。
+  Future<List<Song>> dailySongs() => homeSongs();
 
-  /// 私人电台（REA 观察到 privatefm 接口与 RcmMode 字段）。
-  Future<List<Song>> privateRadio() async {
-    final json = await gateway.request(HuaweiPaths.privateFm,
-        body: const <String, dynamic>{'rcmMode': '1', 'contentType': '1'});
-    return deepList(json, const [
-      'songSimpleInfos', 'songs', 'list', 'data',
-    ]).map(parseSong).toList();
-  }
+  /// 兼容旧调用：音源不支持私人电台，退回收藏。
+  Future<List<Song>> privateRadio() => favorites(limit: 30);
 
-  /// 推荐歌单（REA 观察到 recommend/playlist 接口）。
-  Future<List<Playlist>> recommendedPlaylists() async {
-    final json = await gateway.request(HuaweiPaths.recommendPlaylist,
-        body: const <String, dynamic>{
-          'contentType': 1,
-          'start': 0,
-          'limit': 30,
-        });
-    return deepList(json, const [
-      'playListInfos', 'playlistInfos', 'songList', 'list', 'data',
-    ]).map(parsePlaylist).toList();
-  }
+  /// 兼容旧调用：推荐歌单即音源返回的歌单集合。
+  Future<List<Playlist>> recommendedPlaylists() => playlists();
 
-  /// 榜单详情：chartID 与 chartCode 均来自 REA 符号/堆字段。
+  /// 兼容旧调用：榜单按 id 找到对应 type=7 歌单后读歌曲。
   Future<List<Song>> chartSongs(String chartId) async {
-    final json = await gateway.request(HuaweiPaths.chartDetail,
-        body: <String, dynamic>{
-          'chartID': chartId,
-          'chartCode': chartId,
-          'contentType': 1,
-          'start': 0,
-          'limit': 50,
-        });
-    return deepList(json, const [
-      'songSimpleInfos', 'songs', 'list', 'data',
-    ]).map(parseSong).toList();
+    final all = await playlists();
+    for (final p in all) {
+      if (p.id == chartId) return playlistSongs(p);
+    }
+    return <Song>[];
   }
 
   /// 榜单 / 歌单通用解析（字段名来自 REA：chartID / songNum / picture）。

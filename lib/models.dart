@@ -93,11 +93,15 @@ class Playlist {
     required this.name,
     this.cover,
     this.songCount = 0,
+    this.kind = '',
   });
   final String id;
   final String name;
   final Uri? cover;
   final int songCount;
+
+  /// 音源插件事实：4=收藏歌单 collected / 5=自建歌单 owned / 7=榜单 chart。
+  final String kind;
 }
 
 /// 逐字歌词的一个字（源码事实：HMRC `<offset,duration>text`，时间毫秒、

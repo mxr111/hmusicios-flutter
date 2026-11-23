@@ -8,7 +8,7 @@ import 'package:muyu_flutter/widgets/discover_page.dart';
 import 'package:muyu_flutter/widgets/immersive_player.dart';
 
 void main() {
-  testWidgets('发现页在空数据下可构建（Banner/金刚区/歌单/榜单/电台）', (tester) async {
+  testWidgets('发现页在空数据下可构建（音源支持的歌单/最近播放/榜单/收藏）', (tester) async {
     final state = AppState();
     await tester.pumpWidget(MaterialApp(
       theme: MuyuTheme.light(),
@@ -17,11 +17,11 @@ void main() {
     await tester.pump();
 
     expect(find.text('音乐厅'), findsOneWidget);
-    expect(find.text('心动电台'), findsWidgets); // Banner + 金刚区 + 电台卡
-    // 下方区块（推荐歌单/新歌速递/榜单）在 ListView 里懒加载，滚动后再验证。
-    await tester.scrollUntilVisible(find.text('新歌速递'), 300, scrollable: find.byType(Scrollable).first);
+    expect(find.text('我的收藏'), findsWidgets); // 金刚区 + 收藏板块
+    // 下方区块（我的歌单/最近播放/榜单）在 ListView 里懒加载，滚动后再验证。
+    await tester.scrollUntilVisible(find.text('最近播放'), 300, scrollable: find.byType(Scrollable).first);
     await tester.pump();
-    expect(find.text('新歌速递'), findsOneWidget);
+    expect(find.text('最近播放'), findsOneWidget);
     state.dispose();
   });
 

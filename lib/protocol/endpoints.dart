@@ -34,10 +34,15 @@ class HuaweiPaths {
   static const String albumDetail = '/music-metacontent-service/v1/service/album/detail/byalbumcode';
   static const String artistDetail = '/music-metacontent-service/v2/service/artist/detail/byartistcode';
 
-  // 用户行为（API_CONTRACT 校正后的真实路径）
+  // 用户行为（音源插件 huawei-source.exe 实际包含的接口）
+  /// 歌单发现：与收藏列表同一接口，contentTypes=[4,5,7]。
   static const String playlistDetail =
-      '/music-userbehavior-service/v1/service/playlist/detail/all';
+      '/music-userbehavior-service/v3/service/favorite/simple/all';
+  /// 收藏歌单（type=4 collected）详情。
   static const String playlistSongs =
+      '/music-operation-service/v2/service/musiclist/detail/bymusiclistid';
+  /// 自建歌单（type=5 owned）详情，GET + playListID/start/limit。
+  static const String ownedPlaylistSongs =
       '/music-userbehavior-service/v1/service/playlist/detail/all';
   static const String favorites =
       '/music-userbehavior-service/v3/service/favorite/simple/all';

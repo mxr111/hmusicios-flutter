@@ -89,6 +89,7 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
       if (!mounted) return;
       widget.state.refresh();
       widget.state.loadHome();
+      widget.state.loadLibrary();
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop<bool>(true);
       }

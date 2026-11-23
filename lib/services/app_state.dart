@@ -41,34 +41,10 @@ class AppState extends ChangeNotifier {
 
   bool get isLoggedIn => api.isLoggedIn;
 
-  /// 首页 / 发现页数据。每个板块独立容错：某个接口失败只让该板块空，
-  /// 不用假数据填充，也不让一次 400 拖垮整页。
+  /// 首页数据：只走音源插件真实支持的接口（最近播放 + 歌单发现）。
   Future<void> loadHome() async {
     await _guard(() async {
-      DiscoverData base;
-      try {
-        base = await api.discover();
-      } catch (_) {
-        base = const DiscoverData();
-      }
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        _soft<dynamic>(api.dailySongs(), <Song>[]),
-        _soft<dynamic>(api.privateRadio(), <Song>[]),
-        base.playlists.isNotEmpty
-            ? Future<dynamic>.value(base.playlists)
-            : _soft<dynamic>(api.recommendedPlaylists(), <Playlist>[]),
-      ]);
-      final daily = (results[0] as List).cast<Song>().toList();
-      final radio = (results[1] as List).cast<Song>().toList();
-      final lists = (results[2] as List).cast<Playlist>().toList();
-
-      discover = DiscoverData(
-        banners: base.banners,
-        newSongs: base.newSongs.isNotEmpty ? base.newSongs : daily,
-        playlists: lists,
-        charts: base.charts,
-        radio: radio,
-      );
+      discover = await api.discover();
       homeSongs = discover.newSongs;
       playlists = discover.playlists;
       charts = discover.charts;
@@ -159,6 +135,7 @@ class AppState extends ChangeNotifier {
     api.signInWithToken(token);
     notifyListeners();
     loadHome();
+    loadLibrary();
   }
 
   void signOut() {

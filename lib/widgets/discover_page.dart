@@ -27,7 +27,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     _CategorySpec('推荐歌单', Icons.recommend, 2),
     _CategorySpec('排行榜', Icons.leaderboard, 2),
     _CategorySpec('新歌', Icons.new_releases, 0),
-    _CategorySpec('心动电台', Icons.radio, 0),
+    _CategorySpec('我的收藏', Icons.favorite, 3),
     _CategorySpec('歌手', Icons.person, 2),
     _CategorySpec('专辑', Icons.album, 2),
     _CategorySpec('播客', Icons.podcasts, 2),
@@ -58,16 +58,16 @@ class _DiscoverPageState extends State<DiscoverPage> {
         const SizedBox(height: 16),
         _categories(pal),
         const SizedBox(height: 24),
-        _sectionTitle('推荐歌单', d.playlists.isEmpty ? '暂无数据' : '共 ${d.playlists.length} 个', pal),
+        _sectionTitle('我的歌单', d.playlists.isEmpty ? '登录后可见' : '共 ${d.playlists.length} 个', pal),
         const SizedBox(height: 12),
         d.playlists.isEmpty
-            ? _empty('推荐歌单接口未返回数据', pal)
+            ? _empty('登录后可见歌单', pal)
             : _playlistGrid(d.playlists, pal),
         const SizedBox(height: 24),
-        _sectionTitle('新歌速递', d.newSongs.isEmpty ? '暂无数据' : '共 ${d.newSongs.length} 首', pal),
+        _sectionTitle('最近播放', d.newSongs.isEmpty ? '暂无数据' : '共 ${d.newSongs.length} 首', pal),
         const SizedBox(height: 8),
         d.newSongs.isEmpty
-            ? _empty('新歌接口未返回数据', pal)
+            ? _empty('暂无最近播放，登录后自动同步', pal)
             : _horizontalSongs(d.newSongs.take(8).toList(), pal),
         const SizedBox(height: 22),
         _sectionTitle('排行榜', d.charts.isEmpty ? '暂无数据' : '点击榜单加载歌曲', pal),
@@ -84,11 +84,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
               : _horizontalSongs(widget.state.chartSongs.take(20).toList(), pal),
         ],
         const SizedBox(height: 24),
-        _sectionTitle('心动电台', d.radio.isEmpty ? '暂无数据' : '私人漫游', pal),
+        _sectionTitle('我的收藏', widget.state.favorites.isEmpty ? '登录后可见' : '共 ${widget.state.favorites.length} 首', pal),
         const SizedBox(height: 8),
-        d.radio.isEmpty
-            ? _empty('私人电台接口未返回数据', pal)
-            : _horizontalSongs(d.radio.take(10).toList(), pal),
+        widget.state.favorites.isEmpty
+            ? _empty('登录后可见收藏歌曲', pal)
+            : _horizontalSongs(widget.state.favorites.take(10).toList(), pal),
       ],
     );
   }
