@@ -2,6 +2,7 @@
 // 早期 iOS 版把带 ?query 的路径当 path component 拼接，导致 ? 被编码成 %3F → HTTP 404。
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/protocol/huawei_gateway.dart';
 
@@ -47,5 +48,41 @@ void main() {
     expect(song.id, 'abc');
     expect(song.name, '夜的第七章');
     expect(song.artistText.contains('周杰伦'), isTrue);
+  });
+
+  test('鉴权头是 Digest，不是 Bearer（tinglan 源码事实）', () {
+    final gateway = HuaweiGateway();
+    gateway.session = MusicSession(token: 'music-token', snsUserId: 'u1');
+    final headers = gateway.headers();
+    expect(headers['Authorization'], contains('Digest username=app-music-baseline'));
+    expect(headers['Authorization'], contains('token=music-token'));
+    expect(headers['Authorization']!.toLowerCase().contains('bearer'), isFalse);
+    gateway.dispose();
+  });
+
+  test('无会话调用 Digest 头不含 token 段', () {
+    final gateway = HuaweiGateway();
+    final h = gateway.digestHeader('');
+    expect(h, contains('Digest username=app-music-baseline'));
+    expect(h.contains('token='), isFalse);
+    gateway.dispose();
+  });
+
+  test('逐字 HMRC 解析（tinglan/hmrc.go 格式）', () {
+    final lines = HuaweiAPI.parseHmrc(
+      '[1000,3000]<0,500>我<500,500>爱<1000,500>你\n[5000,2000]<0,400>hello ^你好',
+    );
+    expect(lines.length, 2);
+    expect(lines[0].text, '我爱你');
+    expect(lines[0].words.length, 3);
+    expect(lines[0].words[0].time.inMilliseconds, 1000);
+    expect(lines[0].words[1].time.inMilliseconds, 1500);
+    expect(lines[1].translation, '你好');
+  });
+
+  test('音质档位取流参数 qualityType 为 1/3', () {
+    expect(AudioQuality.standard.typeCode, '1');
+    expect(AudioQuality.lossless.typeCode, '3');
+    expect(AudioQuality.hiRes.typeCode, '3');
   });
 }

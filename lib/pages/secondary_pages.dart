@@ -4,6 +4,8 @@ import '../models.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/immersive_player.dart';
+import '../widgets/discover_page.dart';
 
 /// 搜索页：顶部搜索框 + 结果列表
 class SearchPage extends StatefulWidget {
@@ -79,68 +81,14 @@ class _SearchPageState extends State<SearchPage> {
   }
 }
 
-/// 音乐厅：榜单 / 推荐歌单
+/// 音乐厅（发现页）：委托给华为音乐发现页实现。
 class HallPage extends StatelessWidget {
   const HallPage({super.key, required this.state});
 
   final AppState state;
 
-  static const List<String> demoCharts = <String>[
-    '飙升榜', '新歌榜', '热歌榜', '原创榜', '华语榜', '欧美榜'
-  ];
-
   @override
-  Widget build(BuildContext context) {
-    final charts = state.charts.isNotEmpty
-        ? state.charts.map((p) => p.name).toList()
-        : demoCharts;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
-      children: [
-        const Text('音乐厅', style: MuyuTheme.title),
-        const SizedBox(height: 6),
-        const Text('榜单与推荐', style: MuyuTheme.muted),
-        const SizedBox(height: 18),
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: MediaQuery.of(context).size.width > 900 ? 4 : 3,
-          childAspectRatio: 1.35,
-          mainAxisSpacing: 14,
-          crossAxisSpacing: 14,
-          children: List<Widget>.generate(charts.length, (i) {
-            return Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    MuyuColors.cardHeart[0].withValues(alpha: 0.85),
-                    MuyuColors.cardDaily[1],
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  const Icon(Icons.leaderboard, size: 20, color: Colors.white),
-                  const Spacer(),
-                  Text(charts[i],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white)),
-                ],
-              ),
-            );
-          }),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => DiscoverPage(state: state);
 }
 
 /// 唱片架：歌单网格
@@ -384,89 +332,15 @@ class SettingsPage extends StatelessWidget {
   }
 }
 
-/// 歌词页：全屏渐变 + 当前行高亮（REA 组件名 lyrics-stage）
+/// 歌词页：委托给沉浸播放器（深色黑胶 + 逐字卡拉 OK，源码事实 stage.go）。
+/// 保留 LyricsPage 名称以兼容 main.dart 的调用。
 class LyricsPage extends StatelessWidget {
   const LyricsPage({super.key, required this.state});
 
   final AppState state;
 
   @override
-  Widget build(BuildContext context) {
-    final song = state.audio.current;
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFFF1FAFF), Color(0xFFE8C9D8), Color(0xFFB4A79E)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.keyboard_arrow_down),
-                    onPressed: () {
-                      state.showLyrics = false;
-                      state.refresh();
-                    },
-                  ),
-                  const Spacer(),
-                  Text(song?.name ?? '歌词', style: MuyuTheme.section),
-                  const Spacer(),
-                  const SizedBox(width: 40),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            CoverArt(url: song?.cover, size: 120, radius: 16, seed: 2),
-            const SizedBox(height: 16),
-            Expanded(
-              child: AnimatedBuilder(
-                animation: state.audio,
-                builder: (context, _) {
-                  final lines = state.lyrics;
-                  if (lines.isEmpty) {
-                    return const Center(
-                      child: Text('暂无歌词', style: MuyuTheme.muted),
-                    );
-                  }
-                  final pos = state.audio.position;
-                  var active = 0;
-                  for (var i = 0; i < lines.length; i++) {
-                    if (lines[i].time <= pos) active = i;
-                  }
-                  return ListView.builder(
-                    itemCount: lines.length,
-                    itemBuilder: (context, i) => Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 8),
-                      child: Text(
-                        lines[i].text,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: i == active ? 18 : 15,
-                          fontWeight:
-                              i == active ? FontWeight.w700 : FontWeight.w400,
-                          color: i == active
-                              ? MuyuColors.primary
-                              : MuyuColors.ink.withValues(alpha: 0.62),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ImmersivePlayer(state: state);
 }
 
 /// 登录面板：账号密码（REA 观察到的 login 接口）+ 手动填入 access_token

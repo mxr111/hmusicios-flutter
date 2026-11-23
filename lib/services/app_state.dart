@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models.dart';
 import '../protocol/huawei_api.dart';
+import '../theme.dart';
 import 'audio_controller.dart';
 
 /// 全局状态：零第三方状态管理，直接用 ChangeNotifier + AnimatedBuilder。
@@ -17,7 +18,11 @@ class AppState extends ChangeNotifier {
   bool loading = false;
   String? error;
   bool showLyrics = false;
-  bool darkMode = false;
+
+  /// 12 款主题索引（源码事实 tinglan/theme.go），默认晨光。
+  int themeIndex = 0;
+  MuyuPalette get palette => kMuyuPalettes[themeIndex.clamp(0, kMuyuPalettes.length - 1)];
+  bool get darkMode => palette.dark; // 兼容旧 ThemeMode 逻辑
   int homePage = 1;
 
   List<Song> homeSongs = <Song>[];
@@ -93,8 +98,14 @@ class AppState extends ChangeNotifier {
     if (i == 3 && favorites.isEmpty && playlists.isEmpty) loadLibrary();
   }
 
+  /// 循环切换 12 款主题。
   void toggleTheme() {
-    darkMode = !darkMode;
+    themeIndex = (themeIndex + 1) % kMuyuPalettes.length;
+    notifyListeners();
+  }
+
+  void setTheme(int index) {
+    themeIndex = index.clamp(0, kMuyuPalettes.length - 1);
     notifyListeners();
   }
 

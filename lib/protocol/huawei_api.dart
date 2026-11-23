@@ -13,35 +13,39 @@ class HuaweiAPI {
   final HuaweiGateway gateway;
   String? displayName;
 
-  bool get isLoggedIn => gateway.accessToken != null;
+  /// 源码事实：必须有音乐会话（token + snsUserID）才能发业务请求。
+  bool get isLoggedIn => gateway.session != null;
 
-  /// 手动填入凭据：签名算法未还原时用于调试与抓包。
-  void signInWithToken(String token, {String? nick}) {
-    gateway.accessToken = token.trim();
-    displayName = nick;
+  /// 手动填入音乐 token + snsUserID（调试用，跳过 OAuth 流程）。
+  void signInWithSession(String musicToken, String snsUserId, {String? nick}) {
+    gateway.session = MusicSession(token: musicToken.trim(), snsUserId: snsUserId.trim());
+    displayName = nick ?? '华为音乐账号';
   }
 
-  /// REA 观察到的账号登录接口（字段为推断，服务端签名未还原时可能失败）。
+  /// 兼容旧名：只给 token 时 snsUserID 留空（收藏等接口会失败），
+  /// 仅用于快速验证取流。完整功能请用 signInWithSession / signInWithCode。
+  void signInWithToken(String token, {String? nick}) {
+    signInWithSession(token.trim(), '', nick: nick);
+  }
+
+  /// 三段式登录第 2、3 步：授权码 -> 账号 AT -> 音乐会话。
+  /// 第 1 步（打开授权页 + PKCE）由 UI 层的 OAuth 流程完成后把 code/verifier 传入。
+  Future<void> signInWithCode(String code, String verifier) async {
+    final accessToken = await gateway.exchangeOAuthCode(code, verifier);
+    await gateway.exchangeMusicToken(accessToken);
+    displayName = '华为音乐账号';
+  }
+
+  /// 兼容旧接口名：账号密码登录不是源码支持的方式（tinglan 用扫码 OAuth）。
+  /// 这里明确拒绝，避免误导。
   Future<void> signInWithAccount(String account, String password) async {
-    final json = await gateway.request(HuaweiPaths.userInfo, body: <String, dynamic>{
-      'account': account,
-      'password': password,
-      'client_id': HuaweiPaths.clientId,
-    });
-    final token = _findStringDeep(json,
-        const ['accessToken', 'access_token', 'token', 'atToken']);
-    if (token == null) {
-      throw const HuaweiException(
-          '该登录方式未返回凭据，请改用「手动填入 access_token」');
-    }
-    gateway.accessToken = token;
-    displayName = _findStringDeep(json,
-            const ['nickname', 'displayName', 'userName', 'nickName']) ??
-        account;
+    throw const HuaweiException(
+        '华为音乐不支持账号密码直登，请使用扫码登录（OAuth PKCE）');
   }
 
   void signOut() {
-    gateway.accessToken = null;
+    gateway.session = null;
+    gateway.accountToken = null;
     displayName = null;
   }
 
@@ -65,13 +69,14 @@ class HuaweiAPI {
     return raw.map(parseSong).toList();
   }
 
-  Future<List<Song>> search(String keyword) async {
+  Future<List<Song>> search(String keyword, {int start = 0, int limit = 20}) async {
+    // 源码事实（API_CONTRACT §4）：全部为字符串字段。
     final json = await gateway.request(HuaweiPaths.search, body: <String, dynamic>{
+      'contentType': '1',
+      'correct': '1',
       'queryWord': keyword,
-      'keyword': keyword,
-      'contentType': 1,
-      'pageNo': 1,
-      'pageSize': 30,
+      'start': '$start',
+      'limit': '$limit',
     });
     return deepList(json, const [
       'songSimpleInfos', 'contentSimpleInfos', 'songs', 'songList',
@@ -100,11 +105,18 @@ class HuaweiAPI {
     }).toList();
   }
 
-  Future<List<Song>> favorites() async {
+  Future<List<Song>> favorites({int start = 0, int limit = 50}) async {
+    // 源码事实（API_CONTRACT §3.1）：targetSnsUserID + contentTypes[1]。
+    final userId = gateway.session?.snsUserId ?? '';
     final json = await gateway.request(HuaweiPaths.favorites,
-        body: const <String, dynamic>{'contentType': 1});
+        body: <String, dynamic>{
+          'targetSnsUserID': userId,
+          'start': start,
+          'limit': limit,
+          'contentTypes': <int>[1],
+        });
     return deepList(json, const [
-      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+      'favoriteInfos', 'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
     ]).map(parseSong).toList();
   }
 
@@ -155,68 +167,145 @@ class HuaweiAPI {
     return first.isEmpty ? Song(id: songCode, name: '未知歌曲') : parseSong(first.first);
   }
 
+  /// 歌词（源码事实 tinglan/catalog.go Lyrics）：歌词地址随播放响应返回，
+  /// 不从曲库详情取。优先逐字 HMRC（wordByWordLyric），再行级 LRC
+  /// （lineByLineLyric / lyricAddress），并把译文合并进对应行。
   Future<List<LyricLine>> lyrics(String songCode) async {
-    final detail = await gateway.request(HuaweiPaths.songDetail,
-        body: <String, dynamic>{'songCodes': [songCode]});
-    final addr = _findUrlDeep(detail, const [
-      'lyricAddress', 'lyricUrl', 'lrcUrl', 'lyricAddr'
-    ]);
-    if (addr == null) return <LyricLine>[];
-    final text = await gateway.fetchText(addr);
-    return parseLrc(text);
-  }
-
-  /// 取流：REA 观察到 /music-play-service/v3/service/file/bycontentcode
-  Future<List<HuaweiAudioFile>> audioFiles(String songCode) async {
+    // 复用取流响应：歌词地址在 fileURL 同一个响应里。
     final json = await gateway.request(HuaweiPaths.playUrl,
         body: <String, dynamic>{
           'contentCode': songCode,
-          'songCode': songCode,
-          'contentType': 1,
-          'quality': 'h',
+          'contentType': '1',
+          'qualityType': '1',
         });
-    final infos = deepList(json, const [
-      'fileInfos', 'audioFiles', 'files', 'list', 'data'
-    ]);
-    final out = <HuaweiAudioFile>[];
-    for (final info in infos) {
-      final link = HuaweiGateway.firstUrl(info, const [
-        'playURL', 'url', 'downloadUrl', 'fileUrl', 'link', 'h', 'sq', 'hr'
-      ]);
-      if (link == null) continue;
-      final tier = HuaweiGateway.firstString(info,
-              const ['quality', 'qualityType', 'fileType', 'tier']) ??
-          'h';
-      final size = HuaweiGateway.firstInt(info, const [
-            'size_320mp3', 'size_flac', 'size_hires', 'size', 'fileSize'
-          ]) ??
-          0;
-      out.add(HuaweiAudioFile(
-          quality: AudioQuality.fromCode(tier), url: link, sizeBytes: size));
+
+    Uri? wordUrl; // 逐字 HMRC
+    Uri? plainUrl; // 行级 LRC
+    String? plainText; // 内嵌 LRC 文本
+    // 递归收集 lyricAddress / lineByLineLyric / wordByWordLyric / lyrics。
+    _collectLyricFields(json, (key, value) {
+      if (value is! String || value.isEmpty) return;
+      if (key == 'wordByWordLyric') {
+        wordUrl ??= HuaweiGateway.normalizeUrl(value);
+      } else if (key == 'lineByLineLyric') {
+        final u = HuaweiGateway.normalizeUrl(value);
+        if (u != null) plainUrl ??= u;
+      } else if (key == 'lyricAddress' || key == 'lyricAddres') {
+        final u = HuaweiGateway.normalizeUrl(value);
+        if (u != null) plainUrl ??= u;
+      }
+    });
+
+    List<LyricLine> lines = <LyricLine>[];
+    final wu = wordUrl;
+    if (wu != null) {
+      try {
+        lines = parseHmrc(await gateway.fetchText(wu));
+      } catch (_) {}
     }
-    // 顶层档位键兜底
-    for (final q in AudioQuality.values) {
-      final link = HuaweiGateway.firstUrl(json, [q.code, q.sizeKey]);
-      if (link != null && !out.any((f) => f.quality == q)) {
-        out.add(HuaweiAudioFile(
-          quality: q,
-          url: link,
-          sizeBytes: HuaweiGateway.firstInt(json, [q.sizeKey]) ?? 0,
-        ));
+    final pu = plainUrl;
+    if (pu != null) {
+      try {
+        plainText = await gateway.fetchText(pu);
+      } catch (_) {}
+    }
+    if (plainText != null && plainText.isNotEmpty) {
+      final plain = parseLrc(plainText);
+      if (lines.isEmpty) {
+        lines = plain;
+      } else {
+        lines = mergeTranslations(lines, plain);
+      }
+    }
+    return lines;
+  }
+
+  /// 递归遍历 JSON，把指定 key 的字符串值回调出来（歌词字段可能嵌套多层、
+  /// 还可能是「JSON 字符串套 JSON」）。
+  void _collectLyricFields(dynamic root, void Function(String key, dynamic value) onField) {
+    if (root is Map<String, dynamic>) {
+      for (final entry in root.entries) {
+        if (const ['wordByWordLyric', 'lineByLineLyric', 'lyricAddress', 'lyricAddres', 'lyrics', 'contentExInfo']
+            .contains(entry.key)) {
+          onField(entry.key, entry.value);
+        }
+        // contentExInfo 等可能是 JSON 字符串，二次解析。
+        if (entry.value is String && entry.value.trim().startsWith('{')) {
+          final decoded = jsonDecodeTry(entry.value);
+          if (decoded != null) _collectLyricFields(decoded, onField);
+        } else {
+          _collectLyricFields(entry.value, onField);
+        }
+      }
+    } else if (root is List) {
+      for (final v in root) {
+        _collectLyricFields(v, onField);
+      }
+    }
+  }
+
+  static dynamic jsonDecodeTry(String s) {
+    try {
+      return jsonDecode(s);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 取流（源码事实 tinglan/playback.go）：qualityType "1"=标准(MP3)、
+  /// "3"=无损(FLAC)；主音频用顶层 fileURL，不盲用 fileInfos[0]。
+  /// 分别请求两档，按 playQuality/qualityType + type(codec) 判定实际档位。
+  Future<List<HuaweiAudioFile>> audioFiles(String songCode) async {
+    final out = <HuaweiAudioFile>[];
+    for (final q in <AudioQuality>[AudioQuality.standard, AudioQuality.lossless]) {
+      final json = await gateway.request(HuaweiPaths.playUrl,
+          body: <String, dynamic>{
+            'contentCode': songCode,
+            'contentType': '1',
+            'qualityType': q.typeCode, // 1 或 3
+          });
+      // 顶层 fileURL 是音频（源码明确）；校验资源域名。
+      final link = HuaweiGateway.firstUrl(json, const ['fileURL', 'fileUrl', 'playURL']);
+      if (link == null) continue;
+      if (!_safeAudioUrl(link)) continue;
+
+      final code = HuaweiGateway.firstString(json, const ['playQuality', 'qualityType']) ?? '';
+      final codec = (HuaweiGateway.firstString(json, const ['type']) ?? '').toLowerCase();
+      // 源码判定：code=3 且 codec 含 flac -> lossless；code=1 且非 flac -> standard。
+      AudioQuality actual;
+      if (code == '3' || codec.contains('flac')) {
+        actual = AudioQuality.lossless;
+      } else {
+        actual = AudioQuality.standard;
+      }
+      if (!out.any((f) => f.quality == actual)) {
+        final size = HuaweiGateway.firstInt(json, const ['size', 'fileSize']) ?? 0;
+        out.add(HuaweiAudioFile(quality: actual, url: link, sizeBytes: size));
       }
     }
     if (out.isEmpty) {
-      throw const HuaweiException('该歌曲没有可用的音质档位');
+      throw const HuaweiException('该歌曲没有可用的音质档位（请确认已登录且为会员）');
     }
     return out;
   }
 
+  bool _safeAudioUrl(Uri u) {
+    if (u.scheme != 'https') return false;
+    final host = u.host.toLowerCase();
+    return const ['.dbankcdn.cn', '.tingmall.com', '.kuke.com']
+        .any((s) => host.endsWith(s) && host.length > s.length);
+  }
+
+  /// 收藏增删（源码事实 API_CONTRACT §3.4）：create/delete 两个独立接口，
+  /// 按目标状态调用，不盲切布尔；contentType/contentID 均为字符串。
   Future<void> toggleFavorite(String songCode, bool favorite) async {
-    await gateway.request(HuaweiPaths.favoriteWrite, body: <String, dynamic>{
-      'contentId': songCode,
-      'contentType': 1,
-      'operate': favorite ? 1 : 2,
-    });
+    await gateway.request(
+      favorite ? HuaweiPaths.favoriteCreate : HuaweiPaths.favoriteDelete,
+      body: <String, dynamic>{
+        'contentType': '1',
+        'contentID': songCode,
+      },
+    );
   }
 
   Future<String> membership() async {
@@ -303,6 +392,128 @@ class HuaweiAPI {
     return lines;
   }
 
+  /// 解析逐字 HMRC（源码事实 tinglan/hmrc.go）：
+  ///   [行开始ms,行时长ms]<字偏移ms,字时长ms>字<...>字 ^罗马音/译文
+  /// 字偏移相对行首，行开始相对音频起点；全部毫秒。
+  static List<LyricLine> parseHmrc(String text) {
+    final lines = <LyricLine>[];
+    for (final raw in const LineSplitter().convert(text.replaceAll('\r\n', '\n'))) {
+      final line = raw.trim();
+      if (line.isEmpty ||
+          line.startsWith('[ti:') ||
+          line.startsWith('[ar:') ||
+          line.startsWith('[al:') ||
+          line.startsWith('[by:') ||
+          line.startsWith('[offset:') ||
+          !line.startsWith('[')) {
+        continue;
+      }
+      final close = line.indexOf(']');
+      if (close < 0) continue;
+      final head = _pairMs(line.substring(1, close));
+      if (head == null) continue;
+      final lineStartMs = head.$1;
+      var rest = line.substring(close + 1);
+
+      String romanization = '';
+      String translation = '';
+      final caret = rest.indexOf('^');
+      if (caret >= 0) {
+        final tail = _stripWordMarkers(rest.substring(caret + 1).trim());
+        rest = rest.substring(0, caret);
+        // 源码规则：拉丁行 + 汉字尾 = 译文；汉字行 + 拉丁尾 = 罗马音。
+        if (_hasHan(tail) && !_hasHan(_stripWordMarkers(rest))) {
+          translation = tail;
+        } else {
+          romanization = tail;
+        }
+      }
+
+      final words = <LyricWord>[];
+      final buffer = StringBuffer();
+      while (true) {
+        final open = rest.indexOf('<');
+        if (open < 0) break;
+        final end = rest.indexOf('>', open);
+        if (end < 0) break;
+        final pair = _pairMs(rest.substring(open + 1, end));
+        if (pair == null) break;
+        rest = rest.substring(end + 1);
+        final next = rest.indexOf('<');
+        final chunk = next < 0 ? rest : rest.substring(0, next);
+        rest = next < 0 ? '' : rest.substring(next);
+        if (chunk.isEmpty) continue;
+        words.add(LyricWord(
+          Duration(milliseconds: lineStartMs + pair.$1),
+          chunk,
+        ));
+        buffer.write(chunk);
+      }
+      final body = buffer.toString().trim();
+      if (body.isEmpty) continue;
+      lines.add(LyricLine(
+        Duration(milliseconds: lineStartMs),
+        body,
+        words: words,
+        translation: translation,
+        romanization: romanization,
+      ));
+    }
+    return lines;
+  }
+
+  static (int, int)? _pairMs(String raw) {
+    final parts = raw.split(',');
+    if (parts.length != 2) return null;
+    final a = double.tryParse(parts[0].trim());
+    final b = double.tryParse(parts[1].trim());
+    if (a == null || b == null) return null;
+    return (a.round(), b.round());
+  }
+
+  static String _stripWordMarkers(String s) {
+    final out = StringBuffer();
+    var i = 0;
+    while (i < s.length) {
+      if (s[i] == '<') {
+        final end = s.indexOf('>', i);
+        if (end >= 0 && s.substring(i, end).contains(',')) {
+          i = end + 1;
+          continue;
+        }
+      }
+      out.write(s[i]);
+      i++;
+    }
+    return out.toString().trim();
+  }
+
+  static bool _hasHan(String s) => s.contains(RegExp(r'[\u4e00-\u9fff]'));
+
+  /// 把行级 LRC 的译文合并到逐字 HMRC 对应行（源码 lyrics.MergeSubtitles）。
+  static List<LyricLine> mergeTranslations(
+      List<LyricLine> words, List<LyricLine> plain) {
+    for (final w in words) {
+      for (final p in plain) {
+        // 时间接近（±600ms）或去标点后文本相同的行视为同一句。
+        final near = (p.time.inMilliseconds - w.time.inMilliseconds).abs() < 600;
+        if (near && p.text.trim().isNotEmpty) {
+          if (w.translation.isEmpty) {
+            words[words.indexOf(w)] = LyricLine(
+              w.time,
+              w.text,
+              words: w.words,
+              translation: p.text,
+              romanization: w.romanization,
+            );
+          }
+          break;
+        }
+      }
+    }
+    return words;
+  }
+
   /// 在任意嵌套层里找第一个指定 key 的数组。
   static List<Map<String, dynamic>> deepList(
       dynamic root, List<String> keys) {
@@ -335,41 +546,5 @@ class HuaweiAPI {
       }
     }
     return const <Map<String, dynamic>>[];
-  }
-
-  static String? _findStringDeep(dynamic root, List<String> keys) {
-    if (root is Map) {
-      final m = Map<String, dynamic>.from(root);
-      final direct = HuaweiGateway.firstString(m, keys);
-      if (direct != null) return direct;
-      for (final v in m.values) {
-        final found = _findStringDeep(v, keys);
-        if (found != null) return found;
-      }
-    } else if (root is List) {
-      for (final v in root) {
-        final found = _findStringDeep(v, keys);
-        if (found != null) return found;
-      }
-    }
-    return null;
-  }
-
-  static Uri? _findUrlDeep(dynamic root, List<String> keys) {
-    if (root is Map) {
-      final m = Map<String, dynamic>.from(root);
-      final direct = HuaweiGateway.firstUrl(m, keys);
-      if (direct != null) return direct;
-      for (final v in m.values) {
-        final found = _findUrlDeep(v, keys);
-        if (found != null) return found;
-      }
-    } else if (root is List) {
-      for (final v in root) {
-        final found = _findUrlDeep(v, keys);
-        if (found != null) return found;
-      }
-    }
-    return null;
   }
 }

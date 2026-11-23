@@ -37,6 +37,20 @@ class MuyuAudioController extends ChangeNotifier {
   bool shuffle = false;
   String? error;
 
+  /// REA 观察：播放模式为列表循环 / 随机 / 单曲（文案「随机模式播放结束后未继续下一首」）。
+  PlayMode playMode = PlayMode.listLoop;
+
+  /// REA 观察：播放器音效 8 种（清晰增强/现场余韵/低频增厚/交响厅堂/近场监听/人声聚焦/环绕漫游）。
+  static const List<String> kEffects = <String>[
+    '清晰增强', '现场余韵', '低频增厚', '交响厅堂',
+    '近场监听', '人声聚焦', '环绕漫游',
+  ];
+  String effect = '清晰增强';
+
+  /// REA 观察：定时停止（「X 分钟后停止 / 取消定时」）。
+  Duration? sleepTimer;
+  DateTime? _sleepDeadline;
+
   static const List<AudioQuality> kQualityOrder = <AudioQuality>[
     AudioQuality.hiRes,
     AudioQuality.lossless,
@@ -109,9 +123,47 @@ class MuyuAudioController extends ChangeNotifier {
     if (song != null) await playSong(song, list: queue);
   }
 
+  /// REA 观察：播放模式三态切换（列表循环 / 随机 / 单曲）。
+  void cyclePlayMode() {
+    playMode = PlayMode.values[(playMode.index + 1) % PlayMode.values.length];
+    shuffle = playMode == PlayMode.shuffle;
+    notifyListeners();
+  }
+
+  void setEffect(String value) {
+    if (kEffects.contains(value)) {
+      effect = value;
+      notifyListeners();
+    }
+  }
+
+  /// REA 观察：定时停止，X 分钟后暂停。
+  void setSleepTimer(int minutes) {
+    if (minutes <= 0) {
+      sleepTimer = null;
+      _sleepDeadline = null;
+    } else {
+      sleepTimer = Duration(minutes: minutes);
+      _sleepDeadline = DateTime.now().add(Duration(minutes: minutes));
+    }
+    notifyListeners();
+  }
+
+  Duration? get sleepRemaining {
+    final deadline = _sleepDeadline;
+    if (deadline == null) return null;
+    final left = deadline.difference(DateTime.now());
+    return left.isNegative ? Duration.zero : left;
+  }
+
   Future<void> next() async {
     if (queue.isEmpty) return;
-    final nextIndex = shuffle
+    // REA 观察：单曲循环时播到结尾重播当前曲。
+    if (playMode == PlayMode.single && current != null) {
+      await playSong(current!, list: queue);
+      return;
+    }
+    final nextIndex = playMode == PlayMode.shuffle
         ? (DateTime.now().millisecondsSinceEpoch % queue.length)
         : (index + 1) % queue.length;
     index = nextIndex;
