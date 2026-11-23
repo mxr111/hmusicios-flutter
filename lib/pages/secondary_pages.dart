@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../services/app_state.dart';
-import '../protocol/endpoints.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/immersive_player.dart';
 import '../widgets/discover_page.dart';
+import '../widgets/oauth_webview_page.dart';
 
 /// 搜索页：顶部搜索框 + 结果列表
 class SearchPage extends StatefulWidget {
@@ -345,8 +345,8 @@ class LyricsPage extends StatelessWidget {
 }
 
 /// 登录面板（tinglan 源码事实）：华为音乐走 OAuth 扫码 + PKCE，
-/// 不支持账号密码直登。这里给出扫码入口提示 + 手动填入音乐会话
-/// （music token + snsUserID，loginex 返回的两个字段）。
+/// 不支持账号密码直登。主入口在应用内浏览器完成授权并自动换取音乐会话；
+/// 手动填入 music token + snsUserID 仅作为调试后备。
 class LoginSheet extends StatefulWidget {
   const LoginSheet({super.key, required this.state});
 
@@ -384,16 +384,15 @@ class _LoginSheetState extends State<LoginSheet> {
           const Text('登录华为音乐', style: MuyuTheme.section),
           const SizedBox(height: 10),
           const Text(
-            '华为音乐使用 OAuth 扫码登录（PKCE），不支持账号密码直登。'
-            '按源码事实：扫码后 OAuth code 经 token 端点换账号令牌，'
-            '再经 loginex 换音乐会话（music token + snsUserID）。',
+            '在应用内浏览器打开华为账号授权页完成扫码，'
+            '授权后自动用 PKCE 换取音乐会话，无需手动抓包。',
             style: MuyuTheme.muted,
           ),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
+          FilledButton.icon(
             icon: const Icon(Icons.qr_code_scanner),
-            label: const Text('打开华为账号扫码登录页'),
-            onPressed: () => _showOAuthHint(context),
+            label: const Text('打开内置浏览器扫码登录'),
+            onPressed: () => _openOAuth(context),
           ),
           const SizedBox(height: 18),
           const Divider(),
@@ -432,41 +431,17 @@ class _LoginSheetState extends State<LoginSheet> {
     );
   }
 
-  void _showOAuthHint(BuildContext context) {
-    final uri = Uri.https(
-      HuaweiPaths.authorizeHost,
-      HuaweiPaths.authorizePath,
-      <String, String>{
-        'client_id': HuaweiPaths.clientId,
-        'redirect_uri': HuaweiPaths.redirectUri,
-        'response_type': 'code',
-        'access_type': 'offline',
-        'scope': 'openid',
-        'countryCode': 'cn',
-        'ui_locales': 'zh-cn',
-        'state': 'muyulosstate',
-        'code_challenge': 'see-contract',
-        'code_challenge_method': 'S256',
-      },
-    );
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('扫码登录'),
-        content: SingleChildScrollView(
-          child: Text(
-            '在浏览器中打开授权页完成扫码：\n$uri\n\n'
-            '本复刻工程未内嵌 WebView 的回调拦截；'
-            '请用自有账号抓包取得 loginex 返回的 token 与 snsUserID，'
-            '在下方手动填入即可正常使用全部接口。',
-            style: const TextStyle(fontSize: 13),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('知道了')),
-        ],
+  Future<void> _openOAuth(BuildContext context) async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => OAuthWebViewPage(state: widget.state),
+        fullscreenDialog: true,
       ),
     );
+    // 授权成功后关闭登录面板；取消则保留面板，方便再次尝试或手动填入。
+    if (ok == true && context.mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
   }
 
   void _apply() {

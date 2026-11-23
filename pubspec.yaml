@@ -12,6 +12,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   # 播放 AVPlayer / ExoPlayer 指向本机回环租约代理
   audioplayers: ^6.1.0
+  webview_flutter: ^4.14.1
+  crypto: ^3.0.8
 
 dev_dependencies:
   flutter_test:
