@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../services/app_state.dart';
+import '../protocol/endpoints.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/immersive_player.dart';
@@ -343,7 +344,9 @@ class LyricsPage extends StatelessWidget {
   Widget build(BuildContext context) => ImmersivePlayer(state: state);
 }
 
-/// 登录面板：账号密码（REA 观察到的 login 接口）+ 手动填入 access_token
+/// 登录面板（tinglan 源码事实）：华为音乐走 OAuth 扫码 + PKCE，
+/// 不支持账号密码直登。这里给出扫码入口提示 + 手动填入音乐会话
+/// （music token + snsUserID，loginex 返回的两个字段）。
 class LoginSheet extends StatefulWidget {
   const LoginSheet({super.key, required this.state});
 
@@ -354,17 +357,14 @@ class LoginSheet extends StatefulWidget {
 }
 
 class _LoginSheetState extends State<LoginSheet> {
-  final TextEditingController _account = TextEditingController();
-  final TextEditingController _password = TextEditingController();
   final TextEditingController _token = TextEditingController();
+  final TextEditingController _userId = TextEditingController();
   String? _error;
-  bool _busy = false;
 
   @override
   void dispose() {
-    _account.dispose();
-    _password.dispose();
     _token.dispose();
+    _userId.dispose();
     super.dispose();
   }
 
@@ -382,46 +382,44 @@ class _LoginSheetState extends State<LoginSheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text('登录华为音乐', style: MuyuTheme.section),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _account,
-            decoration: const InputDecoration(labelText: '账号 / 手机号'),
+          const SizedBox(height: 10),
+          const Text(
+            '华为音乐使用 OAuth 扫码登录（PKCE），不支持账号密码直登。'
+            '按源码事实：扫码后 OAuth code 经 token 端点换账号令牌，'
+            '再经 loginex 换音乐会话（music token + snsUserID）。',
+            style: MuyuTheme.muted,
           ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _password,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: '密码'),
-          ),
-          const SizedBox(height: 14),
-          FilledButton(
-            onPressed: _busy ? null : _login,
-            child: Text(_busy ? '登录中…' : '账号密码登录'),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('打开华为账号扫码登录页'),
+            onPressed: () => _showOAuthHint(context),
           ),
           const SizedBox(height: 18),
           const Divider(),
           const SizedBox(height: 10),
-          const Text(
-            '签名算法未还原时，可直接填入抓包得到的 access_token',
-            style: MuyuTheme.muted,
-          ),
+          const Text('已有音乐会话？手动填入（跳过扫码）', style: MuyuTheme.section),
           const SizedBox(height: 8),
           TextField(
             controller: _token,
             maxLines: 2,
             decoration: const InputDecoration(
-              labelText: 'access_token',
+              labelText: 'music token（loginex 的 token）',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _userId,
+            decoration: const InputDecoration(
+              labelText: 'snsUserID',
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 10),
-          OutlinedButton(
-            onPressed: () {
-              if (_token.text.trim().isEmpty) return;
-              widget.state.signInWithToken(_token.text);
-              Navigator.pop(context);
-            },
-            child: const Text('使用 Token'),
+          FilledButton(
+            onPressed: _apply,
+            child: const Text('使用音乐会话'),
           ),
           if (_error != null)
             Padding(
@@ -434,21 +432,52 @@ class _LoginSheetState extends State<LoginSheet> {
     );
   }
 
-  Future<void> _login() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await widget.state.api
-          .signInWithAccount(_account.text.trim(), _password.text);
-      if (mounted) Navigator.pop(context);
-      await widget.state.loadHome();
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  void _showOAuthHint(BuildContext context) {
+    final uri = Uri.https(
+      HuaweiPaths.authorizeHost,
+      HuaweiPaths.authorizePath,
+      <String, String>{
+        'client_id': HuaweiPaths.clientId,
+        'redirect_uri': HuaweiPaths.redirectUri,
+        'response_type': 'code',
+        'access_type': 'offline',
+        'scope': 'openid',
+        'countryCode': 'cn',
+        'ui_locales': 'zh-cn',
+        'state': 'muyulosstate',
+        'code_challenge': 'see-contract',
+        'code_challenge_method': 'S256',
+      },
+    );
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('扫码登录'),
+        content: SingleChildScrollView(
+          child: Text(
+            '在浏览器中打开授权页完成扫码：\n$uri\n\n'
+            '本复刻工程未内嵌 WebView 的回调拦截；'
+            '请用自有账号抓包取得 loginex 返回的 token 与 snsUserID，'
+            '在下方手动填入即可正常使用全部接口。',
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('知道了')),
+        ],
+      ),
+    );
+  }
+
+  void _apply() {
+    if (_token.text.trim().isEmpty || _userId.text.trim().isEmpty) {
+      setState(() => _error = '请同时填入 music token 与 snsUserID');
+      return;
     }
+    widget.state.api.signInWithSession(_token.text, _userId.text);
+    Navigator.pop(context);
+    widget.state.refresh();
+    widget.state.loadHome();
   }
 }
 
