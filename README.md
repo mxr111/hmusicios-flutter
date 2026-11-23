@@ -45,7 +45,7 @@ flutter test      → +4: All tests passed!
 | 底部白色悬浮胶囊播放条：黑胶封面、歌名/歌手、音源徽章、Hi-Res、循环/上一首/播放/下一首、进度 1:19–4:45、收藏/音量/更多/歌词/队列 | `widgets/player_bar.dart` |
 | 全屏歌词页（REA 组件 `lyrics-stage`） | `pages/secondary_pages.dart` |
 | 浅色主题（REA 确认「主题为浅色」）+ 深色切换 | `theme.dart` / 设置页 |
-| App 图标（沐语红环 + 白色「沐」字，REA 配色） | `assets/app_icon.png` + 全套 iOS 尺寸 |
+| App 图标：用户提供的渐变音符图，按 RGB 阈值 + 边界泛洪抠掉黑边，同色系渐变补齐为不透明 | `scripts/process_icon.py` → `assets/app_icon.png` → `scripts/gen_ios_icons.py` 全套尺寸 |
 
 iPad 宽屏用侧栏，iPhone 窄屏自动切底部标签栏。无网络/未登录时也保留完整离线占位界面。
 
@@ -92,7 +92,7 @@ flutter build apk --release     # Android（需 Android SDK）
 flutter build ipa --no-codesign # 仅 macOS + Xcode
 ```
 
-**Windows 不能编译 iOS IPA**（Apple 工具链限制）。已配 `.github/workflows/build-flutter-ipa.yml`：push 到 `main` 后由 `macos-15` runner 执行 `flutter analyze` → `flutter test` → `flutter build ipa --release --no-codesign`，产出 `MuyuFlutter-unsigned-ipa` 产物，自签后装到 iPad。
+**Windows 不能编译 iOS IPA**（Apple 工具链限制）。已配 `.github/workflows/build-flutter-ipa.yml`：push 到 `main` 后由 `macos-15` runner 执行 `flutter analyze` → `flutter test` → `flutter build ipa --release --no-codesign`（Flutter 3.47 只产出 `Runner.xcarchive` 并跳过 IPA）→ 从 xcarchive 里的 `.app` 打包未签名 IPA，上传 `MuyuFlutter-unsigned-ipa` 产物，自签后装到 iPad。
 
 ## 七、已知缺口
 

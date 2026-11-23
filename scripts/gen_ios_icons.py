@@ -15,14 +15,14 @@ ASSET = ROOT / "assets" / "app_icon.png"
 ICONSET = ROOT / "ios" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
 
 source = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    ROOT.parent / "MuyuIOS" / "MuyuIOS" / "Assets.xcassets" /
-    "AppIcon.appiconset" / "AppIcon-1024.png"
+    ROOT / "assets" / "app_icon.png"
 )
 if not source.exists():
     raise SystemExit(f"source icon not found: {source}")
 
 ASSET.parent.mkdir(parents=True, exist_ok=True)
-shutil.copyfile(source, ASSET)
+if source.resolve() != ASSET.resolve():
+    shutil.copyfile(source, ASSET)
 base = Image.open(ASSET).convert("RGB")
 print("source", source, base.size)
 

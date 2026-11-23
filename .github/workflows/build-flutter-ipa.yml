@@ -31,19 +31,24 @@ jobs:
           flutter-version: '3.47.5'
       - run: flutter pub get
 
-      - name: 编译未签名 IPA
+      - name: 编译未签名 App（产出 xcarchive）
         run: |
           set -o pipefail
+          # Flutter 3.47 的 --no-codesign 只生成 Runner.xcarchive 并跳过 IPA，
+          # 所以下一步从 xcarchive 里的 .app 自己打包成未签名 IPA。
           flutter build ipa --release --no-codesign 2>&1 | tee flutter-build.log
 
-      - name: 定位并校验 IPA
+      - name: 从 xcarchive 打包未签名 IPA
         id: ipa
         run: |
-          IPA=$(find build/ios/ipa -name '*.ipa' -type f | head -1)
-          if [ -z "$IPA" ]; then echo "::error::未生成 IPA"; exit 1; fi
-          echo "path=$IPA" >> "$GITHUB_OUTPUT"
-          ls -lh "$IPA"
-          unzip -l "$IPA" | head -14
+          APP=$(find build/ios/archive -name '*.app' -type d | head -1)
+          if [ -z "$APP" ]; then echo "::error::未找到 Runner.app"; exit 1; fi
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry MuyuFlutter-unsigned.ipa Payload
+          echo "path=MuyuFlutter-unsigned.ipa" >> "$GITHUB_OUTPUT"
+          ls -lh MuyuFlutter-unsigned.ipa
+          unzip -l MuyuFlutter-unsigned.ipa | head -14
 
       - name: 上传产物
         uses: actions/upload-artifact@v4

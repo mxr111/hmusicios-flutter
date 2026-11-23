@@ -20,6 +20,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 REPO = os.environ.get("GITHUB_REPO", "mxr111/hmusicios")
@@ -50,20 +51,34 @@ def curl(method: str, path: str, payload=None):
     if payload is not None:
         cmd += ["-H", "Content-Type: application/json", "--data-binary", "@-"]
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        # curl 从 stdin 读取时无法预知长度，会用 chunked；本机代理会直接断连
+        # （curl 52 / HTTP 000）。显式 Content-Length 即可正常上传。
+        cmd += ["-H", f"Content-Length: {len(body)}"]
     cmd.append(path if path.startswith("http") else API + path)
-    proc = subprocess.run(cmd, input=body, capture_output=True)
-    out = proc.stdout.decode("utf-8", "replace")
-    if "\n__HTTP__" not in out:
-        raise RuntimeError(
-            "curl 调用失败: " + proc.stderr.decode("utf-8", "replace")[:300]
-            + " :: " + out[:300]
-        )
-    raw, code = out.rsplit("\n__HTTP__", 1)
-    try:
-        data = json.loads(raw) if raw.strip() else {}
-    except json.JSONDecodeError:
-        data = {"_raw": raw[:300]}
-    return int(code.strip()), data
+
+    # 本机代理偶发返回空响应（HTTP 000）。对连接级失败与 5xx 做有限重试，
+    # 避免整批 100+ 个 blob 因一次抖动全部重来。
+    last_err = ""
+    for attempt in range(4):
+        proc = subprocess.run(cmd, input=body, capture_output=True)
+        out = proc.stdout.decode("utf-8", "replace")
+        last_err = proc.stderr.decode("utf-8", "replace")[:300]
+        if "\n__HTTP__" in out:
+            raw, code = out.rsplit("\n__HTTP__", 1)
+            status = int(code.strip())
+            if status == 0 or status >= 500:
+                if attempt < 3:
+                    time.sleep(1.0 + attempt)
+                    continue
+            try:
+                data = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                data = {"_raw": raw[:300]}
+            return status, data
+        if attempt < 3:
+            time.sleep(1.0 + attempt)
+            continue
+    raise RuntimeError(f"curl 调用失败: {last_err}")
 
 
 def git(*args, binary: bool = False):
