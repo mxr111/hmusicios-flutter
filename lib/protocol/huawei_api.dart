@@ -4,6 +4,32 @@ import '../models.dart';
 import 'endpoints.dart';
 import 'huawei_gateway.dart';
 
+/// 发现页真实数据（字段名来自 REA 对 Muyu.exe 的符号 + 运行时堆取证：
+/// dailyRecInfos / chartInfos / chartID / picture / songNum / columnExtendInfo）。
+/// 任何板块为 empty 都表示接口没有返回该数据，UI 必须显示空状态而不是假内容。
+class DiscoverData {
+  const DiscoverData({
+    this.banners = const <DiscoverBanner>[],
+    this.newSongs = const <Song>[],
+    this.playlists = const <Playlist>[],
+    this.charts = const <Playlist>[],
+    this.radio = const <Song>[],
+  });
+
+  final List<DiscoverBanner> banners;
+  final List<Song> newSongs;
+  final List<Playlist> playlists;
+  final List<Playlist> charts;
+  final List<Song> radio;
+}
+
+class DiscoverBanner {
+  const DiscoverBanner({required this.title, this.subtitle = '', this.imageUrl});
+  final String title;
+  final String subtitle;
+  final Uri? imageUrl;
+}
+
 /// 与沐语 Go 版 internal/catalog 对等：首页 / 搜索 / 榜单 / 收藏 / 歌单 /
 /// 歌词 / 相似推荐 / 取流。解析全部走容错取值，不依赖严格 DTO。
 class HuaweiAPI {
@@ -512,6 +538,176 @@ class HuaweiAPI {
       }
     }
     return words;
+  }
+
+  /// 发现页：调用沐语真实首页接口，解析 banner / 新歌 / 推荐歌单 / 榜单。
+  /// 所有板块都只来自接口；接口没返回就是空列表，UI 显示空状态。
+  Future<DiscoverData> discover() async {
+    final json = await gateway.request(HuaweiPaths.home, body: <String, dynamic>{
+      'pageType': 7,
+      'hasRecommend': 1,
+      'contentType': 1,
+    });
+    return DiscoverData(
+      banners: parseBanners(json),
+      newSongs: deepList(json, const [
+        'dailyRecInfos', 'newSongInfos', 'songSimpleInfos',
+        'contentSimpleInfos', 'songs', 'songlist', 'list',
+      ]).map(parseSong).toList(),
+      playlists: deepList(json, const [
+        'playListInfos', 'playlistInfos', 'recommendPlayListInfos',
+        'recommendLists', 'pgcSongListInfos', 'collections',
+        'recommendedCollections',
+      ]).map(parsePlaylist).toList(),
+      charts: deepList(json, const [
+        'chartInfos', 'charts', 'chartList', 'toplist',
+      ]).map(parsePlaylist).toList(),
+    );
+  }
+
+  /// 每日推荐：请求体来自运行中 Muyu.exe 堆内的真实 JSON。
+  Future<List<Song>> dailySongs() async {
+    final json = await gateway.request(HuaweiPaths.daily,
+        body: const <String, dynamic>{
+          'rcmScenario': '1',
+          'termType': '1',
+          'scenario': '1',
+          'recommendStrategy': '0',
+        });
+    return deepList(json, const [
+      'dailySongs', 'songSimpleInfos', 'songs', 'list', 'data',
+    ]).map(parseSong).toList();
+  }
+
+  /// 私人电台（REA 观察到 privatefm 接口与 RcmMode 字段）。
+  Future<List<Song>> privateRadio() async {
+    final json = await gateway.request(HuaweiPaths.privateFm,
+        body: const <String, dynamic>{'rcmMode': '1', 'contentType': '1'});
+    return deepList(json, const [
+      'songSimpleInfos', 'songs', 'list', 'data',
+    ]).map(parseSong).toList();
+  }
+
+  /// 推荐歌单（REA 观察到 recommend/playlist 接口）。
+  Future<List<Playlist>> recommendedPlaylists() async {
+    final json = await gateway.request(HuaweiPaths.recommendPlaylist,
+        body: const <String, dynamic>{
+          'contentType': 1,
+          'start': 0,
+          'limit': 30,
+        });
+    return deepList(json, const [
+      'playListInfos', 'playlistInfos', 'songList', 'list', 'data',
+    ]).map(parsePlaylist).toList();
+  }
+
+  /// 榜单详情：chartID 与 chartCode 均来自 REA 符号/堆字段。
+  Future<List<Song>> chartSongs(String chartId) async {
+    final json = await gateway.request(HuaweiPaths.chartDetail,
+        body: <String, dynamic>{
+          'chartID': chartId,
+          'chartCode': chartId,
+          'contentType': 1,
+          'start': 0,
+          'limit': 50,
+        });
+    return deepList(json, const [
+      'songSimpleInfos', 'songs', 'list', 'data',
+    ]).map(parseSong).toList();
+  }
+
+  /// 榜单 / 歌单通用解析（字段名来自 REA：chartID / songNum / picture）。
+  static Playlist parsePlaylist(Map<String, dynamic> d) {
+    return Playlist(
+      id: HuaweiGateway.firstString(d, const [
+            'chartID', 'chartId', 'chartCode', 'playListID', 'contentID', 'id'
+          ]) ?? '',
+      name: HuaweiGateway.firstString(d, const [
+            'chartName', 'playListName', 'contentName', 'name', 'title'
+          ]) ?? '',
+      cover: HuaweiGateway.firstUrl(d, const [
+        'picture', 'middleImgURL', 'bigImgURL', 'cover', 'coverUrl'
+      ]),
+      songCount: HuaweiGateway.firstInt(d,
+              const ['songNum', 'totalCount', 'songCount', 'number']) ??
+          0,
+    );
+  }
+
+  /// 从首页响应的 banner / column 数据中抓真实活动图。
+  static List<DiscoverBanner> parseBanners(dynamic root) {
+    final out = <DiscoverBanner>[];
+    void visit(dynamic node, [String parentHint = '']) {
+      if (node is List) {
+        for (final v in node) {
+          visit(v, parentHint);
+        }
+        return;
+      }
+      if (node is! Map) return;
+      final hint = parentHint.toLowerCase();
+      final inBannerContainer = hint.contains('banner') ||
+          hint.contains('column') ||
+          hint.contains('card') ||
+          hint.contains('activity');
+      // 当前节点本身就是 columns/banner 数组里的一个卡片。
+      if (inBannerContainer && out.length < 8) {
+        final self = Map<String, dynamic>.from(node);
+        final url = HuaweiGateway.firstUrl(
+            self, const ['picture', 'imageUrl', 'imgUrl', 'cover', 'picUrl']);
+        final title = HuaweiGateway.firstString(
+            self, const ['title', 'name', 'contentName', 'subTitle']);
+        if (url != null &&
+            _bannerImageAllowed(url) &&
+            title != null &&
+            title.isNotEmpty) {
+          out.add(DiscoverBanner(
+            title: title,
+            subtitle: HuaweiGateway.firstString(
+                    self, const ['subtitle', 'description', 'summary']) ??
+                '',
+            imageUrl: url,
+          ));
+        }
+      }
+      for (final entry in node.entries) {
+        final key = entry.key.toLowerCase();
+        final value = entry.value;
+        final isBanner = key.contains('banner') ||
+            (key.contains('column') && value is Map);
+        if ((isBanner || inBannerContainer) &&
+            value is Map &&
+            out.length < 8) {
+          final m = Map<String, dynamic>.from(value);
+          final url = HuaweiGateway.firstUrl(
+              m, const ['picture', 'imageUrl', 'imgUrl', 'cover', 'picUrl']);
+          final title = HuaweiGateway.firstString(
+              m, const ['title', 'name', 'contentName', 'subTitle']);
+          if (url != null &&
+              _bannerImageAllowed(url) &&
+              title != null &&
+              title.isNotEmpty) {
+            out.add(DiscoverBanner(
+              title: title,
+              subtitle: HuaweiGateway.firstString(
+                      m, const ['subtitle', 'description', 'summary']) ??
+                  '',
+              imageUrl: url,
+            ));
+          }
+        }
+        visit(value, key);
+      }
+    }
+    visit(root);
+    return out;
+  }
+
+  static bool _bannerImageAllowed(Uri url) {
+    if (url.scheme != 'https') return false;
+    final host = url.host.toLowerCase();
+    return const ['.dbankcdn.cn', '.tingmall.com', '.kuke.com']
+        .any((s) => host.endsWith(s) && host.length > s.length);
   }
 
   /// 在任意嵌套层里找第一个指定 key 的数组。

@@ -23,6 +23,7 @@ class HuaweiPaths {
   static const String home =
       '/music-operation-service/v1/service/page/detail/all?pageType=7&hasRecommend=1';
   static const String daily = '/music-recommend-service/v1/service/recommend/querydaily';
+  static const String recommendPlaylist = '/music-recommend-service/v1/service/recommend/playlist';
   static const String privateFm = '/music-recommend-service/v1/service/recommend/privatefm';
   static const String similar = '/music-recommend-service/v2/service/recommend/querysimilar';
   static const String chartDetail = '/music-operation-service/v1/service/chart/detail/bychartid';

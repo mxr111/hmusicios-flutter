@@ -5,11 +5,11 @@ import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
 
-/// 华为音乐「发现页 / 音乐厅」。
-/// 结构事实来源：REA 对 Muyu.exe 的中文文案提取——
-/// 「音乐厅」「排行榜」「推荐歌单」「歌单分类」「新歌推荐」「热歌速递」
-/// 「心动电台」「发现刚刚抵达的新鲜旋律」「展示各平台的榜单和推荐歌单」。
-/// 数据优先用已登录接口（首页 / 榜单 / 相似推荐），无数据时保留完整占位界面。
+/// 华为音乐「音乐厅 / 发现页」。
+///
+/// 界面结构来自 REA 对 Muyu.exe 的文案与符号取证；
+/// 所有内容（活动图 / 新歌 / 歌单 / 榜单 / 电台）都来自真实接口。
+/// 接口没返回数据就明确显示空状态，绝不拿假歌曲、假歌单名填充。
 class DiscoverPage extends StatefulWidget {
   const DiscoverPage({super.key, required this.state});
 
@@ -23,22 +23,15 @@ class _DiscoverPageState extends State<DiscoverPage> {
   final PageController _banner = PageController(viewportFraction: 0.9);
   int _bannerIndex = 0;
 
-  static const List<_BannerSpec> banners = <_BannerSpec>[
-    _BannerSpec('发现刚刚抵达的新鲜旋律', '新歌推荐', '每日上新 · 听见好音乐',
-        <Color>[Color(0xFF6C5CE7), Color(0xFFA29BFE)]),
-    _BannerSpec('热歌速递', '本周热歌榜', '大家都在听', <Color>[Color(0xFFE8416A), Color(0xFFFF8A65)]),
-    _BannerSpec('心动电台', '私人漫游', '懂你的音乐品味', <Color>[Color(0xFF0984E3), Color(0xFF74B9FF)]),
-  ];
-
   static const List<_CategorySpec> categories = <_CategorySpec>[
-    _CategorySpec('推荐歌单', Icons.recommend),
-    _CategorySpec('排行榜', Icons.leaderboard),
-    _CategorySpec('新歌', Icons.new_releases),
-    _CategorySpec('心动电台', Icons.favorite),
-    _CategorySpec('歌手', Icons.person),
-    _CategorySpec('专辑', Icons.album),
-    _CategorySpec('播客', Icons.podcasts),
-    _CategorySpec('分类', Icons.category),
+    _CategorySpec('推荐歌单', Icons.recommend, 2),
+    _CategorySpec('排行榜', Icons.leaderboard, 2),
+    _CategorySpec('新歌', Icons.new_releases, 0),
+    _CategorySpec('心动电台', Icons.radio, 0),
+    _CategorySpec('歌手', Icons.person, 2),
+    _CategorySpec('专辑', Icons.album, 2),
+    _CategorySpec('播客', Icons.podcasts, 2),
+    _CategorySpec('分类', Icons.category, 2),
   ];
 
   @override
@@ -50,30 +43,52 @@ class _DiscoverPageState extends State<DiscoverPage> {
   @override
   Widget build(BuildContext context) {
     final pal = widget.state.palette;
-    final charts = widget.state.charts;
+    final d = widget.state.discover;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
       children: [
         _titleRow(pal),
+        if (widget.state.loading)
+          const LinearProgressIndicator(minHeight: 2),
+        if (d.banners.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 16),
+          _bannerCarousel(d.banners, pal),
+        ],
         const SizedBox(height: 16),
-        _bannerCarousel(pal),
-        const SizedBox(height: 22),
         _categories(pal),
         const SizedBox(height: 24),
-        _sectionTitle('推荐歌单', '查看更多', pal),
+        _sectionTitle('推荐歌单', d.playlists.isEmpty ? '暂无数据' : '共 ${d.playlists.length} 个', pal),
         const SizedBox(height: 12),
-        _playlistGrid(pal),
+        d.playlists.isEmpty
+            ? _empty('推荐歌单接口未返回数据', pal)
+            : _playlistGrid(d.playlists, pal),
         const SizedBox(height: 24),
-        _sectionTitle('新歌速递', '全部', pal),
+        _sectionTitle('新歌速递', d.newSongs.isEmpty ? '暂无数据' : '共 ${d.newSongs.length} 首', pal),
         const SizedBox(height: 8),
-        _horizontalSongs(_newSongs(), pal),
+        d.newSongs.isEmpty
+            ? _empty('新歌接口未返回数据', pal)
+            : _horizontalSongs(d.newSongs.take(8).toList(), pal),
         const SizedBox(height: 22),
-        _sectionTitle('排行榜', charts.length > 4 ? '更多榜单' : '全部', pal),
+        _sectionTitle('排行榜', d.charts.isEmpty ? '暂无数据' : '点击榜单加载歌曲', pal),
         const SizedBox(height: 12),
-        _chartGrid(charts, pal),
+        d.charts.isEmpty
+            ? _empty('榜单接口未返回数据', pal)
+            : _chartGrid(d.charts, pal),
+        if (widget.state.activeChartId != null) ...<Widget>[
+          const SizedBox(height: 12),
+          _sectionTitle('榜单歌曲', widget.state.chartSongs.isEmpty ? '暂无数据' : '共 ${widget.state.chartSongs.length} 首', pal),
+          const SizedBox(height: 8),
+          widget.state.chartSongs.isEmpty
+              ? _empty('榜单详情未返回歌曲', pal)
+              : _horizontalSongs(widget.state.chartSongs.take(20).toList(), pal),
+        ],
         const SizedBox(height: 24),
-        _radioCards(pal),
+        _sectionTitle('心动电台', d.radio.isEmpty ? '暂无数据' : '私人漫游', pal),
+        const SizedBox(height: 8),
+        d.radio.isEmpty
+            ? _empty('私人电台接口未返回数据', pal)
+            : _horizontalSongs(d.radio.take(10).toList(), pal),
       ],
     );
   }
@@ -84,7 +99,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
         Text('音乐厅', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: pal.text)),
         const Spacer(),
         const SourceBadge(compact: true),
-        const SizedBox(width: 8),
+        const SizedBox(width: 4),
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: '刷新发现页',
+          onPressed: () => widget.state.loadHome(),
+        ),
         IconButton(
           icon: Icon(Icons.search, color: pal.text),
           onPressed: () {
@@ -96,7 +116,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  Widget _bannerCarousel(MuyuPalette pal) {
+  Widget _bannerCarousel(List banners, MuyuPalette pal) {
     return SizedBox(
       height: 150,
       child: Column(
@@ -110,29 +130,49 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 final b = banners[i];
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      gradient: LinearGradient(
-                        colors: b.gradient,
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Stack(
+                      fit: StackFit.expand,
                       children: [
-                        Text(b.subtitle,
-                            style: const TextStyle(fontSize: 11, color: Colors.white70)),
-                        const SizedBox(height: 6),
-                        Text(b.title,
-                            style: const TextStyle(
-                                fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white)),
-                        const SizedBox(height: 6),
-                        Text(b.tagline,
-                            style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                        b.imageUrl == null
+                            ? Container(color: pal.surface)
+                            : Image.network(
+                                b.imageUrl.toString(),
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => Container(color: pal.surface),
+                              ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: <Color>[Colors.transparent, Color(0xCC000000)],
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(b.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white)),
+                              if (b.subtitle.isNotEmpty)
+                                Text(b.subtitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.white70)),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -168,7 +208,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
       childAspectRatio: 1.1,
       children: categories.map((c) {
         return InkWell(
-          onTap: () => _onCategory(c.label),
+          onTap: () {
+            widget.state.tab = c.tab;
+            widget.state.refresh();
+          },
           borderRadius: BorderRadius.circular(14),
           child: Container(
             decoration: BoxDecoration(
@@ -192,23 +235,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  void _onCategory(String label) {
-    switch (label) {
-      case '排行榜':
-      case '推荐歌单':
-      case '分类':
-        widget.state.tab = 2; // 唱片架（歌单/榜单聚合）
-        break;
-      case '歌手':
-      case '专辑':
-        widget.state.tab = 2;
-        break;
-      default:
-        widget.state.tab = 0; // 首页推荐
-    }
-    widget.state.refresh();
-  }
-
   Widget _sectionTitle(String title, String action, MuyuPalette pal) {
     return Row(
       children: [
@@ -219,17 +245,40 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  Widget _playlistGrid(MuyuPalette pal) {
-    final lists = widget.state.playlists;
-    final items = lists.take(6).toList();
+  Widget _empty(String message, MuyuPalette pal) {
+    return InkWell(
+      onTap: () => widget.state.loadHome(),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 96,
+        decoration: BoxDecoration(
+          color: pal.surface,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off_outlined, size: 22, color: pal.muted),
+            const SizedBox(height: 6),
+            Text(message, style: TextStyle(fontSize: 12, color: pal.muted)),
+            const SizedBox(height: 2),
+            const Text('点击刷新重试', style: TextStyle(fontSize: 11, color: MuyuColors.accent)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _playlistGrid(List<Playlist> lists, MuyuPalette pal) {
     return SizedBox(
       height: 150,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: items.isEmpty ? 6 : items.length,
+        itemCount: lists.length,
         separatorBuilder: (_, _) => const SizedBox(width: 12),
         itemBuilder: (context, i) {
-          final p = items.isNotEmpty ? items[i] : null;
+          final p = lists[i];
           return SizedBox(
             width: 112,
             child: Column(
@@ -237,7 +286,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
               children: [
                 Expanded(
                   child: CoverArt(
-                    url: p?.cover,
+                    url: p.cover,
                     size: 112,
                     radius: 12,
                     seed: i + 2,
@@ -245,7 +294,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  p?.name ?? _demoPlaylistNames[i],
+                  p.name.isEmpty ? '未命名歌单' : p.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12, color: pal.text),
@@ -256,15 +305,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
         },
       ),
     );
-  }
-
-  static const List<String> _demoPlaylistNames = <String>[
-    '华语流行精选', '深夜治愈系', '国风雅集', '运动燃脂', '经典老歌', '轻音乐放松',
-  ];
-
-  List<Song> _newSongs() {
-    final all = widget.state.homeSongs;
-    return all.isEmpty ? _DiscoverDemo.songs : all.take(8).toList();
   }
 
   Widget _horizontalSongs(List<Song> songs, MuyuPalette pal) {
@@ -307,9 +347,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
   }
 
   Widget _chartGrid(List<Playlist> charts, MuyuPalette pal) {
-    final names = charts.isEmpty
-        ? const <String>['飙升榜', '新歌榜', '热歌榜', '原创榜', '华语榜', '欧美榜']
-        : charts.map((p) => p.name).toList();
     return GridView.count(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -317,88 +354,43 @@ class _DiscoverPageState extends State<DiscoverPage> {
       mainAxisSpacing: 10,
       crossAxisSpacing: 10,
       childAspectRatio: 2.0,
-      children: List<Widget>.generate(names.length.clamp(0, 6), (i) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                MuyuColors.cardHeart[0].withValues(alpha: 0.9),
-                MuyuColors.cardDaily[1],
+      children: List<Widget>.generate(charts.length.clamp(0, 9), (i) {
+        final p = charts[i];
+        return InkWell(
+          onTap: () => widget.state.loadChart(p.id),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  MuyuColors.cardHeart[0].withValues(alpha: 0.9),
+                  MuyuColors.cardDaily[1],
+                ],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Text('${i + 1}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white70)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(p.name.isEmpty ? '未命名榜单' : p.name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
               ],
             ),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              Text('${i + 1}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white70)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(names[i], maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
-              ),
-            ],
           ),
         );
       }),
     );
   }
-
-  Widget _radioCards(MuyuPalette pal) {
-    return Row(
-      children: [
-        Expanded(child: _radioCard('心动电台', '根据你的喜好推荐', Icons.favorite, MuyuColors.cardHeart, pal)),
-        const SizedBox(width: 12),
-        Expanded(child: _radioCard('私人漫游', ' endless mix', Icons.explore, MuyuColors.cardDaily, pal)),
-      ],
-    );
-  }
-
-  Widget _radioCard(String title, String sub, IconData icon, List<Color> grad, MuyuPalette pal) {
-    return Container(
-      height: 90,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        gradient: LinearGradient(colors: grad, begin: Alignment.topLeft, end: Alignment.bottomRight),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, color: Colors.white, size: 20),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
-              Text(sub, style: const TextStyle(fontSize: 11, color: Colors.white70)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _BannerSpec {
-  const _BannerSpec(this.title, this.subtitle, this.tagline, this.gradient);
-  final String title;
-  final String subtitle;
-  final String tagline;
-  final List<Color> gradient;
 }
 
 class _CategorySpec {
-  const _CategorySpec(this.label, this.icon);
+  const _CategorySpec(this.label, this.icon, this.tab);
   final String label;
   final IconData icon;
-}
-
-class _DiscoverDemo {
-  static final List<Song> songs = <Song>[
-    Song(id: 'd-1', name: '发现新旋律', artists: const ['华为音乐'],
-        qualities: const {AudioQuality.standard, AudioQuality.hiRes}),
-    Song(id: 'd-2', name: '热歌速递', artists: const ['华语流行']),
-    Song(id: 'd-3', name: '心动时刻', artists: const ['治愈系']),
-  ];
+  final int tab;
 }
