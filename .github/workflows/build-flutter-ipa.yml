@@ -22,7 +22,8 @@ jobs:
   build-ipa:
     name: macOS 云端编译未签名 IPA
     needs: verify
-    runs-on: macos-15
+    # macos-15 池可能长时间排队；macos-14 同样自带 Xcode + iphoneos SDK
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
