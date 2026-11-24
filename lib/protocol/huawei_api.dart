@@ -429,8 +429,8 @@ class HuaweiAPI {
     // 1=MQ、2=HQ、3=SQ(FLAC)、5/7=Hi-Res。按目标档位依次回退。
     const typeCodes = <AudioQuality, List<String>>{
       AudioQuality.hiRes: <String>['7', '5', '3'],
-      AudioQuality.lossless: <String>['3', '2'],
-      AudioQuality.standard: <String>['1', '2'],
+      AudioQuality.lossless: <String>['3', '2', '5'],
+      AudioQuality.standard: <String>['1', '2', '3'],
     };
     for (final q in wanted) {
       Map<String, dynamic>? json;
@@ -462,11 +462,6 @@ class HuaweiAPI {
         '3' => AudioQuality.lossless,
         _ => AudioQuality.standard,
       };
-      // 不超过上游声明的最高档（防止响应虚报）。
-      if (upstreamQualities != null && !upstreamQualities.contains(actual) &&
-          upstreamQualities.isNotEmpty) {
-        actual = upstreamQualities.reduce((a, b) => a.index > b.index ? a : b);
-      }
       if (!out.any((f) => f.quality == actual)) {
         out.add(HuaweiAudioFile(
           quality: actual,
