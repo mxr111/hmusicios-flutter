@@ -15,7 +15,10 @@ class MuyuAudioController extends ChangeNotifier {
       : netease = netease ?? NeteaseApi() {
     _player.onPositionChanged.listen((p) {
       position = p;
-      notifyListeners();
+      _positionSampleAt = DateTime.now();
+      // 高频进度只通知进度条；歌词用 Ticker 自行外推到屏幕刷新率，
+      // 不再让整棵 widget 树跟着播放器事件重建。
+      positionNotifier.value = p;
     });
     _player.onDurationChanged.listen((d) {
       duration = d;
@@ -40,6 +43,20 @@ class MuyuAudioController extends ChangeNotifier {
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
   bool playing = false;
+
+  /// 低频进度通知（播放器回调频率），仅给进度条等轻量组件监听。
+  final ValueNotifier<Duration> positionNotifier =
+      ValueNotifier<Duration>(Duration.zero);
+  DateTime _positionSampleAt = DateTime.now();
+
+  /// 歌词动画用：在上一次播放器进度样本基础上按真实时间外推，
+  /// 让 120Hz 屏幕逐帧得到连续位置，而不是等播放器每秒一跳。
+  Duration get displayPosition {
+    var p = position;
+    if (playing) p += DateTime.now().difference(_positionSampleAt);
+    if (duration > Duration.zero && p > duration) return duration;
+    return p < Duration.zero ? Duration.zero : p;
+  }
   double volume = 1.0;
   bool shuffle = false;
   String? error;
@@ -81,6 +98,8 @@ class MuyuAudioController extends ChangeNotifier {
     error = null;
     position = Duration.zero;
     duration = Duration.zero;
+    _positionSampleAt = DateTime.now();
+    positionNotifier.value = Duration.zero;
     notifyListeners();
 
     try {
@@ -109,16 +128,21 @@ class MuyuAudioController extends ChangeNotifier {
   }
 
   Future<void> toggle() async {
+    playing = !playing;
+    _positionSampleAt = DateTime.now();
+    notifyListeners();
     if (playing) {
-      await _player.pause();
-    } else {
       await _player.resume();
+    } else {
+      await _player.pause();
     }
   }
 
   Future<void> seek(Duration to) async {
     await _player.seek(to);
     position = to;
+    _positionSampleAt = DateTime.now();
+    positionNotifier.value = to;
     notifyListeners();
   }
 
@@ -215,6 +239,7 @@ class MuyuAudioController extends ChangeNotifier {
   @override
   void dispose() {
     _sleepTicker?.cancel();
+    positionNotifier.dispose();
     _player.dispose();
     super.dispose();
   }

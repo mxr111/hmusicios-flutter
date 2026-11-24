@@ -1,4 +1,5 @@
 import '../models.dart';
+import '../models_home.dart';
 import 'huawei_api.dart';
 import 'netease_gateway.dart';
 
@@ -25,6 +26,160 @@ class NeteaseApi {
   }
 
   void signOut() => gateway.signOut();
+
+  /// 网易云独立首页：并行拉取真实推荐数据，单个板块失败不影响其他板块。
+  /// 这些接口均来自 EXE / 官方 weapi 实测，未登录也能拿到公开推荐；
+  /// 登录后 /weapi/v3/discovery/recommend/songs 会返回个性化日推。
+  Future<NeteaseHomeData> homeFeed({
+    int playlistOffset = 0,
+    int playlistLimit = 18,
+  }) async {
+    final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      _soft<dynamic>(_homeBanners(), <NeteaseHomeBanner>[]),
+      _soft<dynamic>(homePlaylists(offset: playlistOffset, limit: playlistLimit), <Playlist>[]),
+      _soft<dynamic>(dailySongs(), <Song>[]),
+      _soft<dynamic>(newSongs(), <Song>[]),
+      _soft<dynamic>(privateFm(), <Song>[]),
+      _soft<dynamic>(privateContents(), <NeteaseHomeSpecial>[]),
+    ]);
+    final data = NeteaseHomeData(
+      banners: results[0] as List<NeteaseHomeBanner>,
+      playlists: results[1] as List<Playlist>,
+      dailySongs: results[2] as List<Song>,
+      newSongs: results[3] as List<Song>,
+      radioSongs: results[4] as List<Song>,
+      specials: results[5] as List<NeteaseHomeSpecial>,
+    );
+    if (data.isEmpty) {
+      throw const NeteaseException('网易云推荐流未返回任何数据，请检查网络后重试');
+    }
+    return data;
+  }
+
+  /// 首页歌单流：/weapi/playlist/list，支持 offset 翻页（换一批）。
+  Future<List<Playlist>> homePlaylists({int offset = 0, int limit = 18}) async {
+    final json = await gateway.post('/weapi/playlist/list', <String, dynamic>{
+      'cat': '全部',
+      'order': 'hot',
+      'limit': limit,
+      'offset': offset,
+      'total': true,
+    });
+    final raw = json['playlists'];
+    if (raw is! List) return <Playlist>[];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(parsePlaylist)
+        .where((p) => p.id.isNotEmpty)
+        .toList();
+  }
+
+  /// 首页轮播：/weapi/v2/banner/get（clientType=pc 才有数据）。
+  Future<List<NeteaseHomeBanner>> _homeBanners() async {
+    final json = await gateway.post('/weapi/v2/banner/get', <String, dynamic>{
+      'clientType': 'pc',
+    });
+    return parseBanners(json);
+  }
+
+  /// 推荐新歌：/weapi/personalized/newsong。
+  Future<List<Song>> newSongs({int limit = 30}) async {
+    final json = await gateway.post('/weapi/personalized/newsong', <String, dynamic>{
+      'type': 'recommend',
+      'limit': limit,
+    });
+    // 服务端可能忽略 limit；客户端再截断，避免推荐流一次塞入过多卡片。
+    return _deepSongs(json['result'] ?? json).take(limit).toList();
+  }
+
+  /// 私人 FM：/weapi/v1/radio/get。
+  Future<List<Song>> privateFm() async {
+    final json = await gateway.post('/weapi/v1/radio/get', <String, dynamic>{});
+    return _deepSongs(json['data'] ?? json);
+  }
+
+  /// 独家放送：/weapi/personalized/privatecontent。
+  Future<List<NeteaseHomeSpecial>> privateContents() async {
+    final json = await gateway.post('/weapi/personalized/privatecontent',
+        <String, dynamic>{});
+    return parseSpecials(json['result'] ?? json);
+  }
+
+  /// 解析轮播；独立成静态方法便于离线测试与容错解析。
+  static List<NeteaseHomeBanner> parseBanners(Map<String, dynamic> json) {
+    final raw = json['banners'];
+    if (raw is! List) return <NeteaseHomeBanner>[];
+    final out = <NeteaseHomeBanner>[];
+    for (final item in raw) {
+      if (item is! Map<String, dynamic>) continue;
+      final title = _firstString(item, const ['title', 'typeTitle', 'name']) ?? '';
+      final subtitle =
+          _firstString(item, const ['subtitle', 'copywriter', 'description']) ?? '';
+      final image = _firstString(item, const [
+            'imageUrl',
+            'pic',
+            'sPicUrl',
+            'sPic',
+            'coverImgUrl',
+          ]) ??
+          '';
+      if (title.isEmpty && image.isEmpty) continue;
+      out.add(NeteaseHomeBanner(
+        title: title.isEmpty ? '网易云推荐' : title,
+        subtitle: subtitle,
+        imageUrl: _uri(image),
+        targetId: _firstString(item, const ['targetId', 'id']) ?? '',
+      ));
+    }
+    return out;
+  }
+
+  /// 解析歌单卡片（/weapi/playlist/list 与推荐歌单共用）。
+  static Playlist parsePlaylist(Map<String, dynamic> p) {
+    return Playlist(
+      id: '${p['id'] ?? ''}',
+      name: '${p['name'] ?? '歌单'}',
+      cover: _uri(_firstString(p, const ['coverImgUrl', 'picUrl', 'cover']) ?? ''),
+      songCount: (p['trackCount'] is num)
+          ? (p['trackCount'] as num).toInt()
+          : 0,
+      kind: 'collected',
+    );
+  }
+
+  /// 解析独家放送卡。
+  static List<NeteaseHomeSpecial> parseSpecials(dynamic raw) {
+    if (raw is! List) return <NeteaseHomeSpecial>[];
+    final out = <NeteaseHomeSpecial>[];
+    for (final item in raw) {
+      if (item is! Map<String, dynamic>) continue;
+      final title = _firstString(item, const ['name', 'title']) ?? '';
+      if (title.isEmpty) continue;
+      out.add(NeteaseHomeSpecial(
+        id: _firstString(item, const ['id']) ?? '',
+        title: title,
+        subtitle: _firstString(item, const ['copywriter', 'subtitle']) ?? '',
+        cover: _uri(_firstString(item, const ['picUrl', 'sPicUrl', 'cover']) ?? ''),
+      ));
+    }
+    return out;
+  }
+
+  static String? _firstString(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value != null && '$value'.isNotEmpty) return '$value';
+    }
+    return null;
+  }
+
+  Future<T> _soft<T>(Future<T> work, T fallback) async {
+    try {
+      return await work;
+    } catch (_) {
+      return fallback;
+    }
+  }
 
   /// ① 申请二维码登录 key：/weapi/login/qrcode/unikey。
   /// 返回 unikey，UI 用 `https://music.163.com/login?codekey=<unikey>` 展示二维码。
@@ -118,19 +273,23 @@ class NeteaseApi {
     return _deepSongs(json['data'] ?? json);
   }
 
-  /// 推荐歌单：/weapi/v1/discovery/recommend/resource。
+  /// 推荐歌单：优先走官方首页歌单流（实测可用），旧端点失败时兜底。
   Future<List<Playlist>> recommendedPlaylists() async {
+    try {
+      final lists = await homePlaylists(limit: 30);
+      if (lists.isNotEmpty) return lists;
+    } catch (_) {
+      // 旧端点在部分账号下返回 301，继续尝试解析历史响应。
+    }
     final json = await gateway.post(
         '/weapi/v1/discovery/recommend/resource', <String, dynamic>{});
     final raw = json['recommend'];
     if (raw is! List) return <Playlist>[];
-    return raw.whereType<Map<String, dynamic>>().map((p) => Playlist(
-          id: '${p['id'] ?? ''}',
-          name: '${p['name'] ?? '歌单'}',
-          cover: _uri(p['picUrl'] ?? p['coverImgUrl']),
-          songCount: 0,
-          kind: 'collected',
-        )).where((p) => p.id.isNotEmpty).toList();
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(parsePlaylist)
+        .where((p) => p.id.isNotEmpty)
+        .toList();
   }
 
   /// 取流：/weapi/song/enhance/player/url/v1。
@@ -232,8 +391,11 @@ class NeteaseApi {
     }
   }
 
-  /// 内部：递归收集单曲（兼容 songs / tracks 等不同包装）。
-  List<Song> _deepSongs(dynamic root) {
+  /// 测试入口：递归收集单曲（兼容 songs / tracks 等不同包装）。
+  static List<Song> parseSongs(dynamic root) => _deepSongs(root);
+
+  /// 内部：递归收集单曲，不把 album / artist 对象误判成歌曲。
+  static List<Song> _deepSongs(dynamic root) {
     final out = <Song>[];
     void walk(dynamic node) {
       if (node is List) {
@@ -241,11 +403,24 @@ class NeteaseApi {
           walk(v);
         }
       } else if (node is Map<String, dynamic>) {
+        // 仅凭 id + name 会把 album / artist 对象误判成歌曲（实测会多出上百首）。
+        // 真正的歌曲对象一定带歌手、专辑、时长或特权字段之一。
         final hasSongKey = node.containsKey('id') &&
-            (node.containsKey('name') || node.containsKey('artists') ||
-                node.containsKey('ar') || node.containsKey('album') ||
-                node.containsKey('al'));
-        if (hasSongKey) out.add(_song(node));
+            (node.containsKey('artists') ||
+                node.containsKey('ar') ||
+                node.containsKey('album') ||
+                node.containsKey('al') ||
+                node.containsKey('dt') ||
+                node.containsKey('duration') ||
+                node.containsKey('privilege') ||
+                node.containsKey('fee'));
+        final nested = node['song'];
+        final hasNestedSong = nested is Map &&
+            nested['id'] != null &&
+            (nested['name'] != null || nested['artists'] != null || nested['ar'] != null);
+        // personalized/newsong 的外层卡片带 id/name，但同时包着完整 song；
+        // 只解析内层，避免同一首歌出现两次。
+        if (hasSongKey && !hasNestedSong) out.add(_song(node));
         for (final v in node.values) {
           if (v is Map || v is List) walk(v);
         }
@@ -253,11 +428,12 @@ class NeteaseApi {
     }
 
     walk(root);
-    return out;
+    final seen = <String>{};
+    return out.where((s) => s.id.isNotEmpty && seen.add(s.id)).toList();
   }
 
   /// 网易云歌曲 → 统一 Song。音质由上游 privilege 决定（HuaweiAPI.qualitiesFromUpstream）。
-  Song _song(Map<String, dynamic> d) {
+  static Song _song(Map<String, dynamic> d) {
     final artists = <String>[];
     final ids = <String>[];
     final ar = d['artists'] ?? d['ar'];
@@ -302,7 +478,7 @@ class NeteaseApi {
         AudioQuality.standard => 'standard',
       };
 
-  Uri? _uri(dynamic raw) {
+  static Uri? _uri(dynamic raw) {
     if (raw is! String || raw.isEmpty) return null;
     return Uri.tryParse(raw);
   }

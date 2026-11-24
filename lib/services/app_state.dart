@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Color;
 
 import '../models.dart';
+import '../models_home.dart';
 import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
 import '../protocol/netease_api.dart';
@@ -87,6 +88,13 @@ class AppState extends ChangeNotifier {
   DiscoverData discover = const DiscoverData();
   bool discoverLoaded = false;
   List<Song> chartSongs = <Song>[];
+
+  /// 网易云独立首页（与华为发现页分开，不共用假数据或缓存）。
+  NeteaseHomeData neteaseHome = const NeteaseHomeData();
+  bool neteaseHomeLoading = false;
+  String? neteaseHomeError;
+  int neteasePlaylistOffset = 0;
+  bool neteaseHasMorePlaylists = true;
   String? activeChartId;
   String searchKeyword = '';
 
@@ -113,21 +121,98 @@ class AppState extends ChangeNotifier {
   List<Comment> comments = <Comment>[];
   String? commentsForSong;
 
-  /// 首页数据：只走音源插件真实支持的接口（最近播放 + 歌单发现）。
+  /// 首页数据：华为发现页与网易云独立首页严格分开，只走真实接口。
   Future<void> loadHome() async {
+    if (source == MusicSource.netease) {
+      await loadNeteaseHome();
+      return;
+    }
     await _guard(() async {
-      if (source == MusicSource.netease) {
-        final daily = await _soft(netease.dailySongs(), <Song>[]);
-        final lists = await _soft(netease.recommendedPlaylists(), <Playlist>[]);
-        discover = DiscoverData(newSongs: daily, playlists: lists);
-      } else {
-        discover = await api.discover();
-      }
+      discover = await api.discover();
       homeSongs = discover.newSongs;
       playlists = discover.playlists;
       charts = discover.charts;
       discoverLoaded = true;
     });
+  }
+
+  /// 网易云首页推荐流：轮播 / 歌单 / 日推 / 新歌 / 私人FM / 独家放送。
+  Future<void> loadNeteaseHome() async {
+    if (neteaseHomeLoading) return;
+    neteaseHomeLoading = true;
+    error = null;
+    neteaseHomeError = null;
+    notifyListeners();
+    try {
+      final data = await netease.homeFeed();
+      neteaseHome = data;
+      neteasePlaylistOffset = data.playlists.length;
+      neteaseHasMorePlaylists = data.playlists.isNotEmpty;
+      homeSongs = mergeSongs(<List<Song>>[
+        data.dailySongs,
+        data.newSongs,
+        data.radioSongs,
+      ]);
+      playlists = data.playlists;
+      discover = DiscoverData(
+        newSongs: homeSongs,
+        playlists: data.playlists,
+        radio: data.radioSongs,
+      );
+      discoverLoaded = data.isEmpty == false;
+    } catch (e) {
+      neteaseHomeError = e.toString();
+      error = neteaseHomeError;
+    } finally {
+      neteaseHomeLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 推荐歌单「换一批」：按 offset 拉下一页，去重后追加。
+  Future<void> loadMoreNeteasePlaylists() async {
+    if (source != MusicSource.netease ||
+        neteaseHomeLoading ||
+        !neteaseHasMorePlaylists) {
+      return;
+    }
+    neteaseHomeLoading = true;
+    neteaseHomeError = null;
+    notifyListeners();
+    try {
+      final more = await netease.homePlaylists(
+        offset: neteasePlaylistOffset,
+        limit: 12,
+      );
+      if (more.isEmpty) {
+        neteaseHasMorePlaylists = false;
+      } else {
+        final existing = neteaseHome.playlists.map((p) => p.id).toSet();
+        final added = more.where((p) => existing.add(p.id)).toList();
+        neteaseHome = neteaseHome.copyWith(
+          playlists: <Playlist>[...neteaseHome.playlists, ...added],
+        );
+        playlists = neteaseHome.playlists;
+        neteasePlaylistOffset += more.length;
+      }
+    } catch (e) {
+      neteaseHomeError = e.toString();
+    } finally {
+      neteaseHomeLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 多个推荐源合并为一条流，按歌曲 ID 去重并保留首个来源顺序。
+  static List<Song> mergeSongs(Iterable<List<Song>> groups) {
+    final seen = <String>{};
+    final out = <Song>[];
+    for (final group in groups) {
+      for (final song in group) {
+        if (song.id.isNotEmpty && seen.add(song.id)) out.add(song);
+      }
+    }
+    return out;
   }
 
   /// 切换音源：清理当前数据，按新音源重新加载。
@@ -143,8 +228,13 @@ class AppState extends ChangeNotifier {
     charts = <Playlist>[];
     chartSongs = <Song>[];
     searchResults = <Song>[];
+    neteaseHome = const NeteaseHomeData();
+    neteaseHomeError = null;
+    neteasePlaylistOffset = 0;
+    neteaseHasMorePlaylists = true;
     notifyListeners();
-    if (isLoggedIn) await loadHome();
+    // 网易云公开推荐无需登录；华为必须登录后才请求业务接口。
+    if (newSource == MusicSource.netease || isLoggedIn) await loadHome();
   }
 
   Future<void> loadChart(String chartId) async {
@@ -292,22 +382,36 @@ class AppState extends ChangeNotifier {
       final ne = source == MusicSource.netease;
       switch (action) {
         case 'radio':
-          songs = ne ? await netease.dailySongs() : await api.privateRadio(mode: '1');
+          songs = ne
+              ? (neteaseHome.radioSongs.isNotEmpty
+                  ? neteaseHome.radioSongs
+                  : await netease.privateFm())
+              : await api.privateRadio(mode: '1');
           break;
         case 'daily':
-          songs = ne ? await netease.dailySongs() : await api.dailySongs();
+          songs = ne
+              ? (neteaseHome.dailySongs.isNotEmpty
+                  ? neteaseHome.dailySongs
+                  : await netease.dailySongs())
+              : await api.dailySongs();
           break;
         case 'heart':
-          songs = ne ? await netease.dailySongs() : await api.privateRadio(mode: '2');
+          songs = ne
+              ? (neteaseHome.dailySongs.isNotEmpty
+                  ? neteaseHome.dailySongs
+                  : await netease.dailySongs())
+              : await api.privateRadio(mode: '2');
           break;
         case 'new':
           songs = discover.newSongs.isNotEmpty
               ? discover.newSongs
-              : (ne ? await netease.dailySongs() : await api.dailySongs());
+              : (ne ? await netease.newSongs() : await api.dailySongs());
           break;
         case 'hot':
           if (ne) {
-            songs = discover.newSongs;
+            songs = discover.newSongs.isNotEmpty
+                ? discover.newSongs
+                : await netease.newSongs();
           } else {
             songs = await api.similarSongs(
               audio.current?.id ?? (homeSongs.isNotEmpty ? homeSongs.first.id : ''),
@@ -400,6 +504,10 @@ class AppState extends ChangeNotifier {
     activeChartId = null;
     discover = const DiscoverData();
     discoverLoaded = false;
+    neteaseHome = const NeteaseHomeData();
+    neteaseHomeError = null;
+    neteasePlaylistOffset = 0;
+    neteaseHasMorePlaylists = true;
     notifyListeners();
   }
 

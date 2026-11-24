@@ -90,22 +90,30 @@ class PlayerBar extends StatelessWidget {
                 ],
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Row(
-                    children: [
-                      Text(_fmt(currentSeconds), style: MuyuTheme.muted),
-                      Expanded(
-                        child: Slider(
-                          value: currentSeconds,
-                          min: 0,
-                          max: total,
-                          activeColor: MuyuColors.primary,
-                          inactiveColor: MuyuColors.divider,
-                          onChanged: (v) =>
-                              audio.seek(Duration(seconds: v.toInt())),
-                        ),
-                      ),
-                      Text(_fmt(total), style: MuyuTheme.muted),
-                    ],
+                  child: ValueListenableBuilder<Duration>(
+                    valueListenable: audio.positionNotifier,
+                    builder: (context, value, _) {
+                      final seconds = hasTrack
+                          ? value.inSeconds.toDouble().clamp(0.0, total)
+                          : currentSeconds;
+                      return Row(
+                        children: [
+                          Text(_fmt(seconds), style: MuyuTheme.muted),
+                          Expanded(
+                            child: Slider(
+                              value: seconds,
+                              min: 0,
+                              max: total,
+                              activeColor: MuyuColors.primary,
+                              inactiveColor: MuyuColors.divider,
+                              onChanged: (v) =>
+                                  audio.seek(Duration(seconds: v.toInt())),
+                            ),
+                          ),
+                          Text(_fmt(total), style: MuyuTheme.muted),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 if (wide) ..._rightButtons(context, song),

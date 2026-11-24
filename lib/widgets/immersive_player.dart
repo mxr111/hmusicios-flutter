@@ -1,11 +1,14 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models.dart';
 import '../models_skin.dart';
 import '../services/app_state.dart';
 import '../services/audio_controller.dart';
+import '../services/lyric_progress.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -27,53 +30,50 @@ class ImmersivePlayer extends StatelessWidget {
     final size = MediaQuery.of(context).size;
     final wide = size.width >= 900;
 
-    return AnimatedBuilder(
-      animation: state.audio,
-      builder: (context, _) {
-        return Scaffold(
-          backgroundColor: pal.base,
-          body: Stack(
-            children: [
-              // 1. 封面模糊背景
-              Positioned.fill(child: _Backdrop(url: song?.cover, dark: pal.dark)),
-              // 2. 暗色蒙层（保证文字可读）
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: (pal.dark ? Colors.black : Colors.white)
-                        .withValues(alpha: pal.dark ? 0.45 : 0.30),
-                  ),
-                ),
+    // 不在这里监听播放器进度：进度高频变化会让整页每秒重建。
+    // 歌词与进度条各自用 Ticker / ValueListenableBuilder 局部刷新。
+    return Scaffold(
+      backgroundColor: pal.base,
+      body: Stack(
+        children: [
+          // 1. 封面模糊背景
+          Positioned.fill(child: _Backdrop(url: song?.cover, dark: pal.dark)),
+          // 2. 暗色蒙层（保证文字可读）
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: (pal.dark ? Colors.black : Colors.white)
+                    .withValues(alpha: pal.dark ? 0.45 : 0.30),
               ),
-              SafeArea(
-                child: Column(
-                  children: [
-                    if (!state.immersiveFullscreen) _topBar(context, song, pal),
-                    Expanded(
-                      child: _stage(context, song, pal, size, wide),
-                    ),
-                    if (!state.immersiveFullscreen)
-                      _BottomControls(state: state, pal: pal),
-                    // 沉浸模式下仍保留一个轻量的退出入口
-                    if (state.immersiveFullscreen)
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 8, right: 12),
-                          child: IconButton(
-                            icon: const Icon(Icons.fullscreen_exit, color: Colors.white70),
-                            onPressed: state.toggleImmersiveFullscreen,
-                            tooltip: '退出全屏沉浸',
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        );
-      },
+          SafeArea(
+            child: Column(
+              children: [
+                if (!state.immersiveFullscreen) _topBar(context, song, pal),
+                Expanded(
+                  child: _stage(context, song, pal, size, wide),
+                ),
+                if (!state.immersiveFullscreen)
+                  _BottomControls(state: state, pal: pal),
+                // 沉浸模式下仍保留一个轻量的退出入口
+                if (state.immersiveFullscreen)
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8, right: 12),
+                      child: IconButton(
+                        icon: const Icon(Icons.fullscreen_exit, color: Colors.white70),
+                        onPressed: state.toggleImmersiveFullscreen,
+                        tooltip: '退出全屏沉浸',
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -493,6 +493,7 @@ class _CoverSide extends StatelessWidget {
 }
 
 /// 右侧歌词列表（逐字卡拉OK）。
+/// 高频刷新只发生在当前行的 CustomPainter，列表本身按「当前行」变化才重建。
 class _LyricSide extends StatefulWidget {
   const _LyricSide({required this.state, required this.pal});
   final AppState state;
@@ -502,12 +503,51 @@ class _LyricSide extends StatefulWidget {
   State<_LyricSide> createState() => _LyricSideState();
 }
 
-class _LyricSideState extends State<_LyricSide> {
+class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
   final ScrollController _scroll = ScrollController();
+  final ValueNotifier<Duration> _displayPosition =
+      ValueNotifier<Duration>(Duration.zero);
+  Ticker? _ticker;
   int _lastActive = -1;
 
   @override
+  void initState() {
+    super.initState();
+    _displayPosition.value = widget.state.audio.displayPosition;
+    _ticker = createTicker((_) {
+      if (!mounted) return;
+      final next = widget.state.audio.displayPosition;
+      _displayPosition.value = next;
+      final active = _activeIndex(widget.state.lyrics, next);
+      if (active != _lastActive) {
+        _lastActive = active;
+        _scrollTo(active);
+        // 只重建列表的行状态（字号/焦点），逐帧颜色由当前行 painter 完成。
+        setState(() {});
+      }
+    });
+    if (widget.state.audio.playing) _ticker!.start();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LyricSide oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final wasPlaying = oldWidget.state.audio.playing;
+    final playing = widget.state.audio.playing;
+    if (wasPlaying != playing) {
+      if (playing) {
+        _ticker!.start();
+      } else {
+        _ticker!.stop();
+        _displayPosition.value = widget.state.audio.position;
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    _ticker?.dispose();
+    _displayPosition.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -515,16 +555,10 @@ class _LyricSideState extends State<_LyricSide> {
   @override
   Widget build(BuildContext context) {
     final lines = widget.state.lyrics;
-    final pos = widget.state.audio.position;
-    final active = _activeIndex(lines, pos);
-    // 当前行变化时把焦点行滚到中部。
-    if (active >= 0 && active != _lastActive && _scroll.hasClients) {
+    final active = _activeIndex(lines, _displayPosition.value);
+    if (active >= 0 && active != _lastActive) {
       _lastActive = active;
-      _scroll.animateTo(
-        (active * 76.0 - 180).clamp(0.0, _scroll.position.maxScrollExtent),
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOut,
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(active));
     }
 
     if (lines.isEmpty) {
@@ -546,9 +580,19 @@ class _LyricSideState extends State<_LyricSide> {
         active: i == active,
         distance: (i - active).abs(),
         pal: widget.pal,
-        position: pos,
+        position: i == active ? _displayPosition : null,
+        lineEnd: i + 1 < lines.length ? lines[i + 1].time : null,
         onTap: () => widget.state.audio.seek(lines[i].time),
       ),
+    );
+  }
+
+  void _scrollTo(int active) {
+    if (!mounted || active < 0 || !_scroll.hasClients) return;
+    _scroll.animateTo(
+      (active * 76.0 - 180).clamp(0.0, _scroll.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
     );
   }
 
@@ -568,6 +612,7 @@ class _LyricRow extends StatelessWidget {
     required this.distance,
     required this.pal,
     required this.position,
+    required this.lineEnd,
     required this.onTap,
   });
 
@@ -575,12 +620,12 @@ class _LyricRow extends StatelessWidget {
   final bool active;
   final int distance;
   final MuyuPalette pal;
-  final Duration position;
+  final ValueListenable<Duration>? position;
+  final Duration? lineEnd;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    // 字号：基础 20，距焦点越近越大（源码 focus=1-distance/65）。
     final focus = math.max(0.0, 1 - distance / 4.0);
     final fontSize = 19.0 + 5.0 * focus;
     final baseColor = pal.text.withValues(alpha: active ? 1.0 : (0.30 + 0.10 * (1 - focus.clamp(0, 1))));
@@ -594,8 +639,17 @@ class _LyricRow extends StatelessWidget {
           children: [
             SizedBox(
               width: double.infinity,
-              child: active && line.hasWords
-                  ? _KaraokeText(line: line, pal: pal, position: position, fontSize: fontSize)
+              child: active && line.hasWords && position != null
+                  ? ValueListenableBuilder<Duration>(
+                      valueListenable: position!,
+                      builder: (context, pos, _) => _KaraokeText(
+                        line: line,
+                        pal: pal,
+                        position: pos,
+                        lineEnd: lineEnd,
+                        fontSize: fontSize,
+                      ),
+                    )
                   : Text(
                       line.text,
                       style: TextStyle(
@@ -618,72 +672,102 @@ class _LyricRow extends StatelessWidget {
   }
 }
 
-/// 逐字卡拉OK：底层已唱部分透明，未唱部分用 accent 42%，
-/// 上层 clip 出已唱宽度用 accent 全亮（源码 stage.go 两次绘制 + 羽化）。
+/// 逐字卡拉OK：连续裁剪已唱宽度，不再按整字 round 跳色。
+/// 用 CustomPainter 直接画两遍文字，单帧只重绘当前歌词行。
 class _KaraokeText extends StatelessWidget {
   const _KaraokeText({
     required this.line,
     required this.pal,
     required this.position,
     required this.fontSize,
+    this.lineEnd,
+    this.baseColor,
+    this.sungColor,
+    this.fontWeight = FontWeight.w600,
   });
 
   final LyricLine line;
   final MuyuPalette pal;
   final Duration position;
+  final Duration? lineEnd;
   final double fontSize;
-
-  /// smootherstep（源码 sungWidth 用 smootherstep 保持扫过不 jerk）。
-  static double _smoother(double t) {
-    t = t.clamp(0.0, 1.0);
-    return t * t * t * (t * (t * 6 - 15) + 10);
-  }
+  final Color? baseColor;
+  final Color? sungColor;
+  final FontWeight fontWeight;
 
   @override
   Widget build(BuildContext context) {
+    final progress = lyricProgress(line, position, lineEnd: lineEnd);
     final style = TextStyle(
       fontSize: fontSize,
-      fontWeight: FontWeight.w600,
+      fontWeight: fontWeight,
       height: 1.25,
     );
-    // 计算已唱到的字索引与进度。
-    var sungChars = 0;
-    var sungFraction = 0.0;
-    for (var i = 0; i < line.words.length; i++) {
-      final w = line.words[i];
-      final next = i + 1 < line.words.length
-          ? line.words[i + 1].time
-          : line.time + const Duration(seconds: 3);
-      if (position >= next) {
-        sungChars += w.text.length;
-      } else if (position >= w.time) {
-        sungChars += w.text.length;
-        final span = next.inMilliseconds - w.time.inMilliseconds;
-        sungFraction = span > 0
-            ? _smoother((position.inMilliseconds - w.time.inMilliseconds) / span)
-            : 1.0;
-        // 当前字只显示 smootherstep 比例的字符数。
-        sungChars -= w.text.length;
-        sungChars += (w.text.length * sungFraction).round();
-        break;
-      } else {
-        break;
-      }
-    }
-    final shown = line.text;
-    final cut = sungChars.clamp(0, shown.length);
-    final sung = shown.substring(0, cut);
-    final rest = shown.substring(cut);
-
-    return RichText(
-      text: TextSpan(
-        style: style.copyWith(color: pal.accent.withValues(alpha: 0.42)),
-        children: [
-          TextSpan(text: sung, style: style.copyWith(color: pal.accent)),
-          TextSpan(text: rest),
-        ],
+    return SizedBox(
+      height: fontSize * 1.25,
+      child: RepaintBoundary(
+        child: CustomPaint(
+          painter: _KaraokePainter(
+            text: line.text,
+            style: style,
+            progress: progress,
+            baseColor: baseColor ?? pal.accent.withValues(alpha: 0.42),
+            sungColor: sungColor ?? pal.accent,
+          ),
+        ),
       ),
     );
+  }
+}
+
+class _KaraokePainter extends CustomPainter {
+  _KaraokePainter({
+    required this.text,
+    required this.style,
+    required this.progress,
+    required this.baseColor,
+    required this.sungColor,
+  });
+
+  final String text;
+  final TextStyle style;
+  final double progress;
+  final Color baseColor;
+  final Color sungColor;
+  TextPainter? _base;
+  TextPainter? _sung;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final base = _base ??= _createPainter(baseColor);
+    final sung = _sung ??= _createPainter(sungColor);
+    base.layout(maxWidth: size.width);
+    sung.layout(maxWidth: size.width);
+    base.paint(canvas, Offset.zero);
+
+    final sungWidth = sung.width * progress;
+    if (sungWidth <= 0) return;
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, sungWidth, size.height));
+    sung.paint(canvas, Offset.zero);
+    canvas.restore();
+  }
+
+  TextPainter _createPainter(Color color) {
+    return TextPainter(
+      text: TextSpan(text: text, style: style.copyWith(color: color)),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _KaraokePainter old) {
+    return old.text != text ||
+        old.style != style ||
+        old.baseColor != baseColor ||
+        old.sungColor != sungColor ||
+        (old.progress - progress).abs() > 0.0005;
   }
 }
 
@@ -729,25 +813,33 @@ class _BottomControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final audio = state.audio;
     final total = audio.duration.inSeconds.toDouble();
-    final pos = audio.position.inSeconds.toDouble().clamp(0.0, total > 0 ? total : 1.0).toDouble();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Column(
         children: [
-          Row(
-            children: [
-              _t(_fmt(pos)),
-              Expanded(
-                child: Slider(
-                  value: pos,
-                  max: total > 0 ? total : 1.0,
-                  activeColor: pal.accent,
-                  inactiveColor: pal.text.withValues(alpha: 0.25),
-                  onChanged: (v) => audio.seek(Duration(seconds: v.toInt())),
-                ),
-              ),
-              _t(_fmt(total)),
-            ],
+          ValueListenableBuilder<Duration>(
+            valueListenable: audio.positionNotifier,
+            builder: (context, value, _) {
+              final pos = value.inSeconds
+                  .toDouble()
+                  .clamp(0.0, total > 0 ? total : 1.0)
+                  .toDouble();
+              return Row(
+                children: [
+                  _t(_fmt(pos)),
+                  Expanded(
+                    child: Slider(
+                      value: pos,
+                      max: total > 0 ? total : 1.0,
+                      activeColor: pal.accent,
+                      inactiveColor: pal.text.withValues(alpha: 0.25),
+                      onChanged: (v) => audio.seek(Duration(seconds: v.toInt())),
+                    ),
+                  ),
+                  _t(_fmt(total)),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 4),
           Row(
@@ -799,28 +891,74 @@ class _BottomControls extends StatelessWidget {
 /// native_sonnet_outline.go / native_sonnet_glow.go / sonnetgpu.OriginalStrokes）。
 /// 截图事实：超大白色实心字（当前句）+ 白色描边空心字（相邻句）交叠铺满屏幕，
 /// 背景深色模糊封面 + 光晕 + 几何线框（十字/菱形/圆弧/虚线对齐框）。
-class SonnetLyrics extends StatelessWidget {
+class SonnetLyrics extends StatefulWidget {
   const SonnetLyrics({super.key, required this.state, required this.pal});
   final AppState state;
   final MuyuPalette pal;
 
   @override
-  Widget build(BuildContext context) {
-    final lines = state.lyrics;
-    final pos = state.audio.position;
-    var active = -1;
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].time <= pos) active = i;
+  State<SonnetLyrics> createState() => _SonnetLyricsState();
+}
+
+class _SonnetLyricsState extends State<SonnetLyrics>
+    with TickerProviderStateMixin {
+  final ValueNotifier<Duration> _displayPosition =
+      ValueNotifier<Duration>(Duration.zero);
+  Ticker? _ticker;
+  int _active = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayPosition.value = widget.state.audio.displayPosition;
+    _ticker = createTicker((_) {
+      if (!mounted) return;
+      final next = widget.state.audio.displayPosition;
+      _displayPosition.value = next;
+      final active = _LyricSideState._activeIndex(widget.state.lyrics, next);
+      // 只在换句时重建整层；句内逐帧颜色由 _KaraokeText 的 painter 完成。
+      if (active != _active) {
+        _active = active;
+        setState(() {});
+      }
+    });
+    if (widget.state.audio.playing) _ticker!.start();
+  }
+
+  @override
+  void didUpdateWidget(covariant SonnetLyrics oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final wasPlaying = oldWidget.state.audio.playing;
+    final playing = widget.state.audio.playing;
+    if (wasPlaying != playing) {
+      if (playing) {
+        _ticker!.start();
+      } else {
+        _ticker!.stop();
+        _displayPosition.value = widget.state.audio.position;
+      }
     }
-    final st = state.lyricStyle;
-    final glow = st.followCoverColor ? state.glowColor : pal.accent;
+  }
+
+  @override
+  void dispose() {
+    _ticker?.dispose();
+    _displayPosition.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = widget.state.lyrics;
+    final active = _LyricSideState._activeIndex(lines, _displayPosition.value);
+    if (active != _active) _active = active;
+    final st = widget.state.lyricStyle;
+    final glow = st.followCoverColor ? widget.state.glowColor : widget.pal.accent;
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 1. 几何装饰线框（sonnet geometry）
         CustomPaint(painter: _SonnetGeometryPainter(glow: glow)),
-        // 2. 光晕
         Align(
           alignment: Alignment.centerRight,
           child: Container(
@@ -835,17 +973,18 @@ class SonnetLyrics extends StatelessWidget {
             ),
           ),
         ),
-        // 3. 艺术字歌词层
-        if (lines.isEmpty)
+        if (lines.isEmpty || active < 0)
           Center(
             child: Text('暂无歌词',
-                style: TextStyle(color: pal.text.withValues(alpha: 0.5), fontSize: 16)),
+                style: TextStyle(
+                    color: widget.pal.text.withValues(alpha: 0.5), fontSize: 16)),
           )
         else
           LayoutBuilder(
             builder: (context, constraints) {
               final w = constraints.maxWidth;
               final h = constraints.maxHeight;
+              final current = lines[active];
               return SizedBox(
                 width: w,
                 height: h,
@@ -854,7 +993,6 @@ class SonnetLyrics extends StatelessWidget {
                       ? Alignment.center
                       : Alignment.centerLeft,
                   children: [
-                    // 前一句（描边空心，偏上偏左）
                     if (active - 1 >= 0)
                       Positioned(
                         top: h * 0.20,
@@ -865,18 +1003,28 @@ class SonnetLyrics extends StatelessWidget {
                           Colors.white,
                         ),
                       ),
-                    // 当前句（实心大白字，中央）
                     Positioned(
                       top: h * 0.36,
                       left: st.align == LyricAlign.center ? w * 0.10 : w * 0.06,
                       right: st.align == LyricAlign.center ? w * 0.10 : 0,
-                      child: _filled(
-                        lines[active].text,
-                        (h * 0.15 * st.fontScale).clamp(64.0, 200.0),
-                        st.bold,
+                      child: ValueListenableBuilder<Duration>(
+                        valueListenable: _displayPosition,
+                        builder: (context, pos, _) => _KaraokeText(
+                          line: current,
+                          pal: widget.pal,
+                          position: pos,
+                          lineEnd: active + 1 < lines.length
+                              ? lines[active + 1].time
+                              : null,
+                          fontSize:
+                              (h * 0.15 * st.fontScale).clamp(64.0, 200.0),
+                          fontWeight:
+                              st.bold ? FontWeight.w900 : FontWeight.w600,
+                          baseColor: Colors.white.withValues(alpha: 0.45),
+                          sungColor: Colors.white,
+                        ),
                       ),
                     ),
-                    // 后一句（描边空心，偏下偏右）
                     if (active + 1 < lines.length)
                       Positioned(
                         top: h * 0.60,
@@ -887,13 +1035,12 @@ class SonnetLyrics extends StatelessWidget {
                           Colors.white,
                         ),
                       ),
-                    // 译文/副标题
-                    if (active >= 0 && lines[active].subtitles.isNotEmpty)
+                    if (current.subtitles.isNotEmpty)
                       Positioned(
                         top: h * 0.53,
                         left: st.align == LyricAlign.center ? w * 0.12 : w * 0.08,
                         child: Text(
-                          lines[active].subtitles.join(' · '),
+                          current.subtitles.join(' · '),
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.white.withValues(alpha: 0.7),
@@ -906,23 +1053,6 @@ class SonnetLyrics extends StatelessWidget {
             },
           ),
       ],
-    );
-  }
-
-  Widget _filled(String text, double size, bool bold) {
-    return Text(
-      text,
-      maxLines: 1,
-      overflow: TextOverflow.clip,
-      style: TextStyle(
-        fontSize: size,
-        fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
-        color: Colors.white,
-        height: 1.1,
-        shadows: [
-          Shadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 24),
-        ],
-      ),
     );
   }
 

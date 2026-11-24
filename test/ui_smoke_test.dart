@@ -8,6 +8,7 @@ import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/theme.dart';
 import 'package:muyu_flutter/widgets/discover_page.dart';
 import 'package:muyu_flutter/widgets/immersive_player.dart';
+import 'package:muyu_flutter/widgets/netease_home_page.dart';
 
 void main() {
   testWidgets('发现页在空数据下可构建（推荐歌单/新歌/榜单/电台/收藏）', (tester) async {
@@ -24,6 +25,22 @@ void main() {
     await tester.scrollUntilVisible(find.text('新歌速递'), 300, scrollable: find.byType(Scrollable).first);
     await tester.pump();
     expect(find.text('新歌速递'), findsOneWidget);
+    state.dispose();
+  });
+
+  testWidgets('网易云独立首页在空数据下可构建（推荐歌单/推荐流入口）', (tester) async {
+    final state = AppState();
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: Scaffold(body: NeteaseHomePage(state: state, autoLoad: false)),
+    ));
+    await tester.pump();
+
+    expect(find.text('主页'), findsOneWidget);
+    expect(find.text('网易云音乐'), findsOneWidget);
+    expect(find.text('推荐歌单'), findsWidgets); // 金刚入口 + 歌单板块标题
+    expect(find.text('推荐流'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     state.dispose();
   });
 

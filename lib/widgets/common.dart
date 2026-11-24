@@ -53,6 +53,7 @@ class CoverArt extends StatelessWidget {
     final borderRadius = circle
         ? BorderRadius.circular(size / 2)
         : BorderRadius.circular(radius);
+    final dpr = (MediaQuery.maybeDevicePixelRatioOf(context) ?? 1).clamp(1.0, 3.0);
     final child = url == null
         ? placeholder
         : Image.network(
@@ -60,6 +61,10 @@ class CoverArt extends StatelessWidget {
             width: size,
             height: size,
             fit: BoxFit.cover,
+            cacheWidth: (size * dpr).round(),
+            cacheHeight: (size * dpr).round(),
+            filterQuality: FilterQuality.low,
+            gaplessPlayback: true,
             errorBuilder: (_, _, _) => placeholder,
           );
     return ClipRRect(borderRadius: borderRadius, child: child);

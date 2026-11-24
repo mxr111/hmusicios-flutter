@@ -6,6 +6,7 @@ import 'services/app_state.dart';
 import 'widgets/netease_login_sheet.dart';
 import 'theme.dart';
 import 'widgets/home_page.dart';
+import 'widgets/netease_home_page.dart';
 import 'widgets/player_bar.dart';
 import 'widgets/sidebar.dart';
 
@@ -119,7 +120,9 @@ class AppShell extends StatelessWidget {
   Widget _page(BuildContext context) {
     switch (state.tab) {
       case 0:
-        return HomePage(state: state);
+        return state.source == MusicSource.netease
+            ? NeteaseHomePage(state: state)
+            : HomePage(state: state);
       case 1:
         return SearchPage(state: state);
       case 2:
@@ -133,7 +136,9 @@ class AppShell extends StatelessWidget {
           onSettings: () => _openSettings(context),
         );
       default:
-        return HomePage(state: state);
+        return state.source == MusicSource.netease
+            ? NeteaseHomePage(state: state)
+            : HomePage(state: state);
     }
   }
 
