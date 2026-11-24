@@ -68,25 +68,11 @@ class _HomePageState extends State<HomePage> {
     ),
   ];
 
-  /// 截图里出现的真实歌名，作为无网络时的占位数据
-  static List<Song> demoSongs() => <Song>[
-        Song(id: 'demo-1', name: '夜的第七章', artists: const ['周杰伦', '潘儿'],
-            qualities: const {AudioQuality.standard, AudioQuality.hiRes}),
-        Song(id: 'demo-2', name: '江南', artists: const ['林俊杰'],
-            qualities: const {AudioQuality.standard, AudioQuality.lossless}),
-        Song(id: 'demo-3', name: '后来的我们', artists: const ['五月天'],
-            qualities: const {AudioQuality.standard, AudioQuality.hiRes}),
-        Song(id: 'demo-4', name: '晴天', artists: const ['周杰伦']),
-        Song(id: 'demo-5', name: '不能说的秘密', artists: const ['周杰伦']),
-        Song(id: 'demo-6', name: '想见你想见你想见你', artists: const ['八三夭'],
-            qualities: const {AudioQuality.standard, AudioQuality.lossless}),
-      ];
-
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final online = state.homeSongs.isNotEmpty;
-    final songs = online ? state.homeSongs : demoSongs();
+    // 首页列表只显示真实接口数据，不再用硬编码歌曲冒充（用户明确要求）。
+    final songs = state.homeSongs;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 108),
@@ -103,7 +89,7 @@ class _HomePageState extends State<HomePage> {
             separatorBuilder: (_, _) => const SizedBox(width: 16),
             itemBuilder: (context, i) => HomeCard(
               spec: cards[i],
-              onPlay: () => _playCard(cards[i].action, songs),
+              onPlay: () => _playCard(cards[i].action),
             ),
           ),
         ),
@@ -125,8 +111,13 @@ class _HomePageState extends State<HomePage> {
           ),
         if (!state.isLoggedIn)
           const StatePanel(
-            message: '尚未登录华为账号。当前展示的是离线占位界面；'
-                '登录并补齐请求签名后即可加载真实曲库。',
+            message: '尚未登录华为账号。请在「我的」中用华为账号扫码登录后加载真实曲库。',
+          ),
+        if (state.isLoggedIn && !state.loading && songs.isEmpty)
+          StatePanel(
+            message: '首页接口未返回歌曲，请点击重试或到「音乐厅」查看其他板块。',
+            onRetry: state.loadHome,
+            actionLabel: '重试',
           ),
         ...List<Widget>.generate(
           songs.length,
@@ -134,11 +125,8 @@ class _HomePageState extends State<HomePage> {
             song: songs[i],
             index: i,
             onPlay: () => state.play(songs[i], queue: songs),
-            onFavorite: () {
-              setState(() {
-                songs[i].favorite = !songs[i].favorite;
-              });
-            },
+            onFavorite: () => state.toggleFavorite(songs[i]),
+            onArtistTap: () => state.openArtistFromSong(songs[i]),
           ),
         ),
       ],
@@ -218,18 +206,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _playCard(String action, List<Song> songs) {
-    final state = widget.state;
-    if (songs.isEmpty) return;
-    final start = switch (action) {
-      'daily' => 1 % songs.length,
-      'heart' => 2 % songs.length,
-      'new' => 3 % songs.length,
-      'hot' => 4 % songs.length,
-      _ => 0,
-    };
-    state.play(songs[start], queue: songs);
-  }
+  void _playCard(String action) => widget.state.playCard(action);
 }
 
 /// 顶部音源切换：截图里「华为音乐」蓝色胶囊 + 酷狗 K / QQ音乐 / 网易云 圆标。

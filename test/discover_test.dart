@@ -83,6 +83,34 @@ void main() {
     expect(d.newSongs.first.durationMs, 210000);
   });
 
+  test('parseSong 解析 artistNamePairs 的歌手名与 ID（REA HomeSongs 字段）', () {
+    final s = HuaweiAPI.parseSong(<String, dynamic>{
+      'contentID': 'song-with-artist',
+      'contentName': '带歌手ID的歌',
+      'artistNamePairs': <dynamic>[
+        <String, dynamic>{'artistName': '周杰伦', 'artistID': 'artist-jay'},
+        <String, dynamic>{'artistName': '潘儿', 'artistID': 'artist-pan'},
+      ],
+      'durationSeconds': 200,
+    });
+    expect(s.artists, <String>['周杰伦', '潘儿']);
+    expect(s.artistIds, <String>['artist-jay', 'artist-pan']);
+    expect(s.durationMs, 200000);
+  });
+
+  test('parseSong 在只有精简键时也能工作（ID/NM/pic）', () {
+    final s = HuaweiAPI.parseSong(<String, dynamic>{
+      'ID': 'compact-1',
+      'NM': '精简键歌曲',
+      'pic': 'https://contentcenter-drcn.dbankcdn.cn/img/c.jpg',
+      'dur': 185000,
+    });
+    expect(s.id, 'compact-1');
+    expect(s.name, '精简键歌曲');
+    expect(s.durationMs, 185000);
+    expect(s.cover.toString(), contains('dbankcdn.cn'));
+  });
+
   test('空 DiscoverData 表示接口没有返回，不含占位内容', () {
     const d = DiscoverData();
     expect(d.banners, isEmpty);

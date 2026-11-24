@@ -153,7 +153,59 @@ class ImmersivePlayer extends StatelessWidget {
                   title: Text(e, style: TextStyle(color: pal.text, fontSize: 13)),
                   onTap: () => state.audio.setEffect(e),
                 )),
+            const Divider(),
+            ListTile(
+              dense: true,
+              leading: Icon(Icons.timer, color: pal.accent, size: 18),
+              title: Text(
+                state.audio.sleepTimer == null
+                    ? '定时停止'
+                    : '定时：剩余 ${state.audio.sleepRemaining?.inMinutes ?? 0} 分钟',
+                style: TextStyle(color: pal.text, fontSize: 13),
+              ),
+              onTap: () => _showSleepTimer(context, pal),
+            ),
             const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSleepTimer(BuildContext context, MuyuPalette pal) {
+    Navigator.pop(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: pal.surface,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('定时停止',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+            ),
+            ...<int>[5, 10, 15, 30, 45, 60].map(
+              (m) => ListTile(
+                dense: true,
+                title: Text('$m 分钟后停止',
+                    style: TextStyle(color: pal.text, fontSize: 13)),
+                onTap: () {
+                  state.audio.setSleepTimer(m);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+            ListTile(
+              dense: true,
+              title: Text('取消定时',
+                  style: TextStyle(color: pal.text, fontSize: 13)),
+              onTap: () {
+                state.audio.setSleepTimer(0);
+                Navigator.pop(context);
+              },
+            ),
           ],
         ),
       ),

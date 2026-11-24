@@ -73,6 +73,9 @@ class _SearchPageState extends State<SearchPage> {
                   index: i,
                   onPlay: () => state.play(state.searchResults[i],
                       queue: state.searchResults),
+                  onFavorite: () => state.toggleFavorite(state.searchResults[i]),
+                  onArtistTap: () =>
+                      state.openArtistFromSong(state.searchResults[i]),
                 ),
               ),
             ),
@@ -100,19 +103,30 @@ class ShelfPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final playlists = state.playlists.isNotEmpty
-        ? state.playlists
-        : <Playlist>[
-            const Playlist(id: 'p1', name: '我喜欢的音乐', songCount: 128),
-            const Playlist(id: 'p2', name: '深夜循环', songCount: 42),
-            const Playlist(id: 'p3', name: '华语经典', songCount: 66),
-            const Playlist(id: 'p4', name: '通勤路上', songCount: 30),
-          ];
+    final playlists = state.playlists;
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
       children: [
-        const Text('唱片架', style: MuyuTheme.title),
+        Row(
+          children: [
+            const Text('唱片架', style: MuyuTheme.title),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.add),
+              tooltip: '新建歌单',
+              onPressed: () => _createPlaylist(context),
+            ),
+          ],
+        ),
         const SizedBox(height: 18),
+        if (!state.isLoggedIn)
+          const StatePanel(message: '登录后可见你的歌单（收藏 / 自建 / 榜单）。'),
+        if (state.isLoggedIn && playlists.isEmpty)
+          StatePanel(
+            message: '歌单接口未返回数据，请重试或到「音乐厅」浏览推荐歌单。',
+            onRetry: state.loadLibrary,
+            actionLabel: '重试',
+          ),
         GridView.count(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -122,46 +136,75 @@ class ShelfPage extends StatelessWidget {
           crossAxisSpacing: 16,
           children: List<Widget>.generate(playlists.length, (i) {
             final p = playlists[i];
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: p.cover == null
-                        ? Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: i.isEven
-                                    ? MuyuColors.cardDaily
-                                    : MuyuColors.cardHot,
+            return GestureDetector(
+              onTap: () => state.openPlaylist(p),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: p.cover == null
+                          ? Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: i.isEven
+                                      ? MuyuColors.cardDaily
+                                      : MuyuColors.cardHot,
+                                ),
+                              ),
+                              child: const Icon(Icons.album,
+                                  size: 40, color: Colors.white),
+                            )
+                          : Image.network(
+                              p.cover.toString(),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                color: MuyuColors.divider,
+                                child: const Icon(Icons.album, size: 40),
                               ),
                             ),
-                            child: const Icon(Icons.album,
-                                size: 40, color: Colors.white),
-                          )
-                        : Image.network(
-                            p.cover.toString(),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              color: MuyuColors.divider,
-                              child: const Icon(Icons.album, size: 40),
-                            ),
-                          ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(p.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600)),
-                Text('${p.songCount} 首', style: MuyuTheme.muted),
-              ],
+                  const SizedBox(height: 8),
+                  Text(p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text('${p.songCount} 首', style: MuyuTheme.muted),
+                ],
+              ),
             );
           }),
         ),
       ],
+    );
+  }
+
+  void _createPlaylist(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('新建歌单'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '歌单名称'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              Navigator.pop(ctx);
+              if (name.isNotEmpty) state.createPlaylist(name);
+            },
+            child: const Text('创建'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -175,9 +218,7 @@ class MinePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final favs = state.favorites.isNotEmpty
-        ? state.favorites
-        : _HomePageDemoSongs.get();
+    final favs = state.favorites;
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
       children: [
@@ -230,8 +271,11 @@ class MinePage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 20),
-        const Text('我喜欢的音乐', style: MuyuTheme.section),
+        Text('我喜欢的音乐',
+            style: MuyuTheme.section),
         const SizedBox(height: 8),
+        if (state.isLoggedIn && favs.isEmpty)
+          const StatePanel(message: '收藏列表为空，可在播放条点击 ♥ 收藏歌曲。'),
         ...List<Widget>.generate(
           favs.length,
           (i) => SongRow(
@@ -299,15 +343,17 @@ class SettingsPage extends StatelessWidget {
         const Text('关于', style: MuyuTheme.section),
         const SizedBox(height: 8),
         const StatePanel(
-          message: '本工程由 REA 对沐语 v2.0.3 (Muyu.exe) 的静态逆向 + '
-              '运行时进程内存取证复刻，仅实现华为音乐数据源。'
-              '请求签名算法未能还原，若接口返回 401/403 属已知缺口。',
+          message: '本工程由 REA 对沐语 v1.2.0 (Muyu.exe, Go 1.27.4) 全量反编译复刻，'
+              '仅实现华为音乐数据源。登录走内置浏览器 OAuth PKCE + loginex，'
+              '业务请求头为 Digest（app-music-baseline + music token）。'
+              '接口返回 401/403 时请重新扫码登录。',
         ),
         const SizedBox(height: 8),
         const Text(
-          'REA 观察：Go 1.27.4 / MyGo 原生界面 / WebView2 PKCE 登录 / '
-          'api-drcn.music.dbankcloud.cn 私有网关 / h·sq·hr 三档音质 / '
-          '可撤销的本地租约代理 Range 透传。',
+          '反编译事实：module muyu.local/desktop / 222 根模块 + 4 音源 / '
+          '私有网关 api-drcn.music.dbankcloud.cn / '
+          '发现页 columnInfoExs 三层结构 / 取流 qualityType 1(MP3)·3(FLAC) / '
+          '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
           style: MuyuTheme.muted,
         ),
       ],
@@ -456,15 +502,92 @@ class _LoginSheetState extends State<LoginSheet> {
   }
 }
 
-/// 主页占位歌曲在「我的」页复用（避免重复硬编码）
-class _HomePageDemoSongs {
-  const _HomePageDemoSongs._();
 
-  static List<Song> get() => <Song>[
-        Song(id: 'fav-1', name: '夜的第七章', artists: const ['周杰伦', '潘儿'], favorite: true),
-        Song(id: 'fav-2', name: '江南', artists: const ['林俊杰'], favorite: true),
-        Song(id: 'fav-3', name: '后来的我们', artists: const ['五月天'], favorite: true),
-        Song(id: 'fav-4', name: '晴天', artists: const ['周杰伦'], favorite: true),
-      ];
+/// 歌单详情：点击唱片架/发现页歌单卡片进入，真实歌曲列表。
+class PlaylistDetailPage extends StatelessWidget {
+  const PlaylistDetailPage({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final playlist = state.activePlaylist!;
+    final songs = state.playlistSongsList;
+    return PopScope(
+      onPopInvokedWithResult: (_, _) => state.closePlaylist(),
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(playlist.name),
+          leading: BackButton(onPressed: () => state.closePlaylist()),
+          actions: [
+            if (playlist.kind == 'owned')
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: '删除歌单',
+                onPressed: () => state.deletePlaylist(playlist.id),
+              ),
+          ],
+        ),
+        body: songs.isEmpty
+            ? const Center(child: Text('歌单暂无歌曲', style: MuyuTheme.muted))
+            : ListView.builder(
+                padding: const EdgeInsets.only(bottom: 100),
+                itemCount: songs.length,
+                itemBuilder: (context, i) => SongRow(
+                  song: songs[i],
+                  index: i,
+                  onPlay: () => state.play(songs[i], queue: songs),
+                  onFavorite: () => state.toggleFavorite(songs[i]),
+                ),
+              ),
+      ),
+    );
+  }
 }
 
+/// 歌手详情：歌手名 + 热门歌曲（真实接口）。
+class ArtistDetailPage extends StatelessWidget {
+  const ArtistDetailPage({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final artist = state.activeArtist!;
+    final songs = state.artistSongsList;
+    return PopScope(
+      onPopInvokedWithResult: (_, _) => state.closeArtist(),
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(artist.name),
+          leading: BackButton(onPressed: () => state.closeArtist()),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.only(bottom: 100),
+          children: [
+            if (artist.desc.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(artist.desc, style: MuyuTheme.muted),
+              ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('热门歌曲', style: MuyuTheme.section),
+            ),
+            if (songs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(18),
+                child: Text('未返回歌曲', style: MuyuTheme.muted),
+              ),
+            ...List<Widget>.generate(
+              songs.length,
+              (i) => SongRow(
+                song: songs[i],
+                index: i,
+                onPlay: () => state.play(songs[i], queue: songs),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

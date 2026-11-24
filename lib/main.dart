@@ -106,6 +106,10 @@ class AppShell extends StatelessWidget {
         ),
         if (state.showLyrics)
           Positioned.fill(child: LyricsPage(state: state)),
+        if (state.activePlaylist != null)
+          Positioned.fill(child: PlaylistDetailPage(state: state)),
+        if (state.activeArtist != null)
+          Positioned.fill(child: ArtistDetailPage(state: state)),
       ],
     );
   }

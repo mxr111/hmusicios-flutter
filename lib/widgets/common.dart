@@ -207,6 +207,7 @@ class SongRow extends StatelessWidget {
     required this.onPlay,
     this.onFavorite,
     this.onMore,
+    this.onArtistTap,
     this.index = 0,
   });
 
@@ -214,6 +215,7 @@ class SongRow extends StatelessWidget {
   final VoidCallback onPlay;
   final VoidCallback? onFavorite;
   final VoidCallback? onMore;
+  final VoidCallback? onArtistTap;
   final int index;
 
   @override
@@ -239,10 +241,13 @@ class SongRow extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                           color: MuyuColors.ink)),
                   const SizedBox(height: 3),
-                  Text(song.artistText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: MuyuTheme.muted),
+                  GestureDetector(
+                    onTap: onArtistTap,
+                    child: Text(song.artistText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MuyuTheme.muted),
+                  ),
                 ],
               ),
             ),

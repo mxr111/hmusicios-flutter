@@ -62,6 +62,7 @@ class Song {
     required this.name,
     this.album = '',
     this.artists = const <String>[],
+    this.artistIds = const <String>[],
     this.cover,
     this.durationMs = 0,
     this.qualities = const <AudioQuality>{AudioQuality.standard},
@@ -73,6 +74,8 @@ class Song {
   final String name;
   final String album;
   final List<String> artists;
+  /// 歌手 ID（REA 字段 artistID / artistNamePairs.artistID），与 artists 一一对应。
+  final List<String> artistIds;
   final Uri? cover;
   final int durationMs;
   final Set<AudioQuality> qualities;
@@ -142,6 +145,38 @@ class LyricLine {
     }
     return out;
   }
+}
+
+/// 评论（REA 26 条 API 中的 /music-sns-service/v1/service/comment/query）。
+class Comment {
+  const Comment({
+    required this.id,
+    required this.author,
+    required this.content,
+    this.avatar,
+    this.time = '',
+    this.likes = 0,
+  });
+  final String id;
+  final String author;
+  final String content;
+  final Uri? avatar;
+  final String time;
+  final int likes;
+}
+
+/// 歌手（catalog.Library.Artist / SearchArtists）。
+class Artist {
+  const Artist({
+    required this.id,
+    required this.name,
+    this.cover,
+    this.desc = '',
+  });
+  final String id;
+  final String name;
+  final Uri? cover;
+  final String desc;
 }
 
 /// 首页大卡片（截图里的 Music FM / 每日30首 / 心动模式 / 新歌推荐 / 热歌速递）

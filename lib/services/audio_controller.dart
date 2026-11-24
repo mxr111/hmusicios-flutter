@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 
@@ -50,6 +52,7 @@ class MuyuAudioController extends ChangeNotifier {
   /// REA 观察：定时停止（「X 分钟后停止 / 取消定时」）。
   Duration? sleepTimer;
   DateTime? _sleepDeadline;
+  Timer? _sleepTicker;
 
   static const List<AudioQuality> kQualityOrder = <AudioQuality>[
     AudioQuality.hiRes,
@@ -137,14 +140,31 @@ class MuyuAudioController extends ChangeNotifier {
     }
   }
 
-  /// REA 观察：定时停止，X 分钟后暂停。
+  /// REA 观察：定时停止，X 分钟后暂停（真实定时器，到点暂停播放）。
   void setSleepTimer(int minutes) {
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
     if (minutes <= 0) {
       sleepTimer = null;
       _sleepDeadline = null;
     } else {
       sleepTimer = Duration(minutes: minutes);
       _sleepDeadline = DateTime.now().add(Duration(minutes: minutes));
+      _sleepTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+        final deadline = _sleepDeadline;
+        if (deadline == null) return;
+        if (DateTime.now().isAfter(deadline)) {
+          _player.pause();
+          playing = false;
+          sleepTimer = null;
+          _sleepDeadline = null;
+          _sleepTicker?.cancel();
+          _sleepTicker = null;
+          notifyListeners();
+        } else {
+          notifyListeners(); // 刷新剩余时间显示
+        }
+      });
     }
     notifyListeners();
   }
@@ -185,6 +205,7 @@ class MuyuAudioController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _sleepTicker?.cancel();
     _player.dispose();
     super.dispose();
   }

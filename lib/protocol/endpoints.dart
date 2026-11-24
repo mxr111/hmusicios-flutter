@@ -32,7 +32,10 @@ class HuaweiPaths {
   static const String search = '/music-search-service/v10/service/fuzzysearch';
   static const String songDetail = '/music-metacontent-service/v1/service/song/detail/bysongcode';
   static const String albumDetail = '/music-metacontent-service/v1/service/album/detail/byalbumcode';
-  static const String artistDetail = '/music-metacontent-service/v2/service/artist/detail/byartistcode';
+  static const String artistDetail = '/music-metacontent-service/v1/service/artist/detail/byartistcode';
+  /// 歌手歌曲（REA 26 路径实测：/song/simple/byartistcode）。
+  static const String artistSongs = '/music-metacontent-service/v1/service/song/simple/byartistcode';
+  static const String mvFile = '/music-metacontent-service/v1/service/mvfile/bymvid';
 
   // 用户行为（音源插件 huawei-source.exe 实际包含的接口）
   /// 歌单发现：与收藏列表同一接口，contentTypes=[4,5,7]。
@@ -54,6 +57,12 @@ class HuaweiPaths {
       '/music-userbehavior-service/v1/service/favorite/simple/exist';
   static const String recent =
       '/music-userbehavior-service/v1/service/recentlyplayed/query?contentType=1';
+  static const String playlistCreate =
+      '/music-userbehavior-service/v1/service/playlist/create';
+  static const String playlistDelete =
+      '/music-userbehavior-service/v1/service/playlist/delete';
+  static const String playlistChangeSong =
+      '/music-userbehavior-service/v1/service/playlist/changesong';
 
   // 取流 / 会员 / 评论
   static const String playUrl = '/music-play-service/v3/service/file/bycontentcode';

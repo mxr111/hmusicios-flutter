@@ -362,29 +362,164 @@ class HuaweiAPI {
         '';
   }
 
+  /// 收藏状态判断：favorite/simple/exist?contentID=&contentType=。
+  /// REA 运行时内存取证抓到的真实请求（见 REA_DEEP_PLAYER_ANALYSIS §4）。
+  Future<bool> isFavorite(String songCode) async {
+    try {
+      final json = await gateway.get(
+        '${HuaweiPaths.favoriteExist}?contentID=${Uri.encodeComponent(songCode)}'
+        '&contentType=1',
+      );
+      for (final key in const ['isFavorite', 'favorite', 'exist', 'existed']) {
+        final v = json[key];
+        if (v is bool) return v;
+        if (v is num) return v != 0;
+        if (v is String) return v == '1' || v.toLowerCase() == 'true';
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 评论列表（catalog/provider_comments.go + API /comment/query）。
+  Future<List<Comment>> comments(String songCode,
+      {int start = 0, int limit = 20}) async {
+    final json = await gateway.request(HuaweiPaths.comments,
+        body: <String, dynamic>{
+          'contentID': songCode,
+          'contentType': 1,
+          'start': start,
+          'limit': limit,
+        });
+    return deepList(json, const [
+      'commentInfos', 'comments', 'commentList', 'list', 'data'
+    ]).map((d) {
+      return Comment(
+        id: HuaweiGateway.firstString(d, const ['commentID', 'id']) ?? '',
+        author: HuaweiGateway.firstString(
+                d, const ['nickName', 'userName', 'nick', 'author']) ??
+            '匿名用户',
+        content: HuaweiGateway.firstString(
+                d, const ['commentContent', 'content', 'text']) ??
+            '',
+        avatar: HuaweiGateway.firstUrl(
+            d, const ['avatarUrl', 'headUrl', 'userImage', 'avatar']),
+        time: HuaweiGateway.firstString(
+                d, const ['createTime', 'time', 'publishTime']) ??
+            '',
+        likes: HuaweiGateway.firstInt(d, const ['likeCount', 'praiseCount', 'likes']) ?? 0,
+      );
+    }).where((c) => c.content.isNotEmpty).toList();
+  }
+
+  /// 歌手详情（catalog.Library.Artist + API /artist/detail/byartistcode）。
+  Future<Artist> artistDetail(String artistCode) async {
+    final json = await gateway.request(HuaweiPaths.artistDetail,
+        body: <String, dynamic>{'artistCode': artistCode});
+    // 详情可能在顶层，也可能在 artistInfo / data 里；取第一个含名称的 Map。
+    Map<String, dynamic> d = json;
+    for (final key in const ['artistInfo', 'artistDetail', 'data', 'result']) {
+      final nested = json[key];
+      if (nested is Map<String, dynamic>) {
+        d = nested;
+        break;
+      }
+    }
+    return Artist(
+      id: artistCode,
+      name: HuaweiGateway.firstString(
+              d, const ['artistName', 'name', 'artNM']) ??
+          '未知歌手',
+      cover: HuaweiGateway.firstUrl(
+          d, const ['artistPicUrl', 'middleImgURL', 'bigImgURL', 'picture', 'pic']),
+      desc: HuaweiGateway.firstString(
+              d, const ['artistDesc', 'description', 'intro']) ??
+          '',
+    );
+  }
+
+  /// 歌手热门歌曲（API /song/simple/byartistcode）。
+  Future<List<Song>> artistSongs(String artistCode,
+      {int start = 0, int limit = 30}) async {
+    final json = await gateway.request(HuaweiPaths.artistSongs,
+        body: <String, dynamic>{
+          'artistCode': artistCode,
+          'start': start,
+          'limit': limit,
+        });
+    return deepList(json, const [
+      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
+    ]).map(parseSong).toList();
+  }
+
+  /// 专辑歌曲（API /album/detail/byalbumcode）。
+  Future<List<Song>> albumSongs(String albumCode) async {
+    final json = await gateway.request(HuaweiPaths.albumDetail,
+        body: <String, dynamic>{'albumCode': albumCode});
+    return deepList(json, const [
+      'songSimpleInfos', 'contentSimpleInfos', 'songs', 'trackInfos', 'list', 'data'
+    ]).map(parseSong).toList();
+  }
+
+  /// 创建歌单（API /playlist/create）。
+  Future<void> createPlaylist(String name) async {
+    await gateway.request(HuaweiPaths.playlistCreate,
+        body: <String, dynamic>{'playListName': name, 'contentType': 5});
+  }
+
+  /// 删除歌单（API /playlist/delete）。
+  Future<void> deletePlaylist(String playlistId) async {
+    await gateway.request(HuaweiPaths.playlistDelete,
+        body: <String, dynamic>{'playListID': playlistId, 'contentType': 5});
+  }
+
+  /// 向歌单增删歌曲（catalog.ChangeCollectionSong）。
+  Future<void> changeCollectionSong(String playlistId, String songCode,
+      {required bool add}) async {
+    await gateway.request(HuaweiPaths.playlistChangeSong,
+        body: <String, dynamic>{
+          'playListID': playlistId,
+          'contentID': songCode,
+          'contentType': 1,
+          'operation': add ? 1 : 0,
+        });
+  }
+
   // MARK: - 容错解析
 
   static Song parseSong(Map<String, dynamic> d) {
     final artists = <String>[];
-    final single = HuaweiGateway.firstString(d, const [
-      'singerName', 'artistName', 'artNM', 'artist', 'singer'
-    ]);
-    if (single != null) {
-      artists.addAll(single
-          .split(RegExp(r'[/,、&]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty));
-    } else {
-      final pairs = d['artistNamePairs'];
-      if (pairs is List) {
-        for (final p in pairs) {
-          if (p is Map<String, dynamic>) {
-            final n = HuaweiGateway.firstString(
-                p, const ['artistName', 'name']);
-            if (n != null) artists.add(n);
-          }
+    final artistIds = <String>[];
+    // REA HomeSongs：artistNamePairs / arts 里同时含 artistID 与 artistName。
+    final pairs = d['artistNamePairs'] ?? d['arts'];
+    if (pairs is List && pairs.isNotEmpty) {
+      for (final p in pairs) {
+        if (p is Map<String, dynamic>) {
+          final n = HuaweiGateway.firstString(
+              p, const ['artistName', 'name', 'artNM']);
+          final id = HuaweiGateway.firstString(
+              p, const ['artistID', 'artistCode', 'id']);
+          if (n != null) artists.add(n);
+          if (id != null) artistIds.add(id);
         }
       }
+    }
+    if (artists.isEmpty) {
+      final single = HuaweiGateway.firstString(d, const [
+        'singerName', 'artistName', 'artNM', 'artist', 'singer'
+      ]);
+      if (single != null) {
+        artists.addAll(single
+            .split(RegExp(r'[/,、&]'))
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty));
+      }
+    }
+    if (artistIds.isEmpty) {
+      final singleId = HuaweiGateway.firstString(
+          d, const ['artistID', 'artistCode', 'singerId']);
+      if (singleId != null) artistIds.add(singleId);
     }
     final qualities = <AudioQuality>{AudioQuality.standard};
     for (final q in AudioQuality.values) {
@@ -409,6 +544,7 @@ class HuaweiAPI {
               'albumName', 'albNM', 'album', 'albumname']) ??
           '',
       artists: artists,
+      artistIds: artistIds,
       cover: HuaweiGateway.firstUrl(d, const [
         'middleImgURL', 'bigImgURL', 'smallImgURL', 'mImg', 'bImg', 'sImg',
         'pic', 'picture', 'coverUrl', 'cover'

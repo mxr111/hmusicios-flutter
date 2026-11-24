@@ -135,11 +135,11 @@ class PlayerBar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         TinyIconButton(
-          icon: audio.shuffle ? Icons.shuffle : Icons.repeat,
+          icon: audio.playMode.icon,
           color: audio.shuffle ? MuyuColors.accent : MuyuColors.inkMuted,
-          onTap: () {},
+          onTap: audio.cyclePlayMode,
           size: 16,
-          tooltip: '播放模式',
+          tooltip: '播放模式：${audio.playMode.label}',
         ),
         TinyIconButton(icon: Icons.skip_previous, onTap: audio.previous, size: 20),
         const SizedBox(width: 4),
@@ -173,16 +173,24 @@ class PlayerBar extends StatelessWidget {
       TinyIconButton(
         icon: song.favorite ? Icons.favorite : Icons.favorite_border,
         color: MuyuColors.primary,
-        onTap: () {},
-        tooltip: '收藏',
+        onTap: () => state.toggleFavorite(song),
+        tooltip: song.favorite ? '取消收藏' : '收藏',
       ),
-      TinyIconButton(icon: Icons.bookmark_border, onTap: () {}, tooltip: '歌单'),
+      TinyIconButton(
+        icon: Icons.bookmark_border,
+        onTap: () => _showAddToPlaylist(context, song),
+        tooltip: '添加到歌单',
+      ),
       TinyIconButton(
         icon: audio.volume == 0 ? Icons.volume_off : Icons.volume_up,
-        onTap: () => audio.setVolume(audio.volume == 0 ? 1.0 : 0.0),
+        onTap: () => _showVolume(context, audio),
         tooltip: '音量',
       ),
-      TinyIconButton(icon: Icons.more_horiz, onTap: () {}, tooltip: '更多'),
+      TinyIconButton(
+        icon: Icons.more_horiz,
+        onTap: () => _showMore(context, song),
+        tooltip: '更多',
+      ),
       TinyIconButton(
         icon: Icons.lyrics_outlined,
         onTap: () => state.showLyricsFor(song),
@@ -194,6 +202,276 @@ class PlayerBar extends StatelessWidget {
         tooltip: '播放队列',
       ),
     ];
+  }
+
+  void _showVolume(BuildContext context, MuyuAudioController audio) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('音量'),
+        content: StatefulBuilder(
+          builder: (context, setDlg) => Row(
+            children: [
+              IconButton(
+                icon: Icon(audio.volume == 0 ? Icons.volume_off : Icons.volume_up),
+                onPressed: () async {
+                  await audio.setVolume(audio.volume == 0 ? 1.0 : 0.0);
+                  setDlg(() {});
+                },
+              ),
+              Expanded(
+                child: Slider(
+                  value: audio.volume,
+                  onChanged: (v) async {
+                    await audio.setVolume(v);
+                    setDlg(() {});
+                  },
+                ),
+              ),
+              Text('${(audio.volume * 100).round()}%'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+        ],
+      ),
+    );
+  }
+
+  void _showAddToPlaylist(BuildContext context, Song song) {
+    final playlists = state.playlists;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('添加到歌单', style: MuyuTheme.section),
+            ),
+            if (playlists.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(18),
+                child: Text('暂无歌单，请先在「唱片架」创建', style: MuyuTheme.muted),
+              ),
+            ...playlists.where((p) => p.kind == 'owned').map(
+              (p) => ListTile(
+                dense: true,
+                leading: const Icon(Icons.playlist_add),
+                title: Text(p.name),
+                onTap: () async {
+                  await state.api.changeCollectionSong(p.id, song.id, add: true);
+                  if (context.mounted) Navigator.pop(context);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMore(BuildContext context, Song song) {
+    final audio = state.audio;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.equalizer),
+              title: const Text('音效'),
+              subtitle: Text(audio.effect),
+              onTap: () {
+                Navigator.pop(context);
+                _showEffects(context, audio);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer),
+              title: const Text('定时停止'),
+              subtitle: Text(audio.sleepTimer == null
+                  ? '未设置'
+                  : '剩余 ${audio.sleepRemaining?.inMinutes ?? 0} 分钟'),
+              onTap: () {
+                Navigator.pop(context);
+                _showSleepTimer(context, audio);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.high_quality),
+              title: const Text('音质'),
+              subtitle: Text(audio.quality.label),
+              onTap: () {
+                Navigator.pop(context);
+                _showQuality(context, audio);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.comment_outlined),
+              title: const Text('评论'),
+              onTap: () {
+                Navigator.pop(context);
+                state.loadComments(song.id);
+                _showComments(context);
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEffects(BuildContext context, MuyuAudioController audio) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('音效', style: MuyuTheme.section),
+            ),
+            ...MuyuAudioController.kEffects.map(
+              (e) => ListTile(
+                dense: true,
+                title: Text(e),
+                trailing: audio.effect == e
+                    ? const Icon(Icons.check, color: MuyuColors.accent)
+                    : null,
+                onTap: () {
+                  audio.setEffect(e);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+            ListTile(
+              dense: true,
+              title: const Text('关闭音效（原声）'),
+              onTap: () {
+                audio.setEffect('');
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSleepTimer(BuildContext context, MuyuAudioController audio) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('定时停止', style: MuyuTheme.section),
+            ),
+            ...<int>[5, 10, 15, 30, 45, 60].map(
+              (m) => ListTile(
+                dense: true,
+                title: Text('$m 分钟后停止'),
+                onTap: () {
+                  audio.setSleepTimer(m);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+            ListTile(
+              dense: true,
+              title: const Text('取消定时'),
+              onTap: () {
+                audio.setSleepTimer(0);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showQuality(BuildContext context, MuyuAudioController audio) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('音质', style: MuyuTheme.section),
+            ),
+            ...AudioQuality.values.map(
+              (q) => ListTile(
+                dense: true,
+                title: Text(q.label),
+                trailing: audio.quality == q
+                    ? const Icon(Icons.check, color: MuyuColors.accent)
+                    : null,
+                onTap: () {
+                  audio.setQuality(q);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showComments(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: AnimatedBuilder(
+            animation: state,
+            builder: (context, _) => Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: Text('评论', style: MuyuTheme.section),
+                ),
+                if (state.comments.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Text('暂无评论', style: MuyuTheme.muted),
+                  ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: state.comments.length,
+                    itemBuilder: (context, i) {
+                      final c = state.comments[i];
+                      return ListTile(
+                        dense: true,
+                        title: Text(c.author,
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600)),
+                        subtitle: Text(c.content),
+                        trailing: Text('${c.likes}', style: MuyuTheme.muted),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _showQueue(BuildContext context) {

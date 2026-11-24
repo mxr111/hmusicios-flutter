@@ -39,6 +39,18 @@ class AppState extends ChangeNotifier {
   String? activeChartId;
   String searchKeyword = '';
 
+  /// 歌单详情：点击歌单卡片加载其中歌曲。
+  Playlist? activePlaylist;
+  List<Song> playlistSongsList = <Song>[];
+
+  /// 歌手详情：歌手页的歌曲与专辑入口。
+  Artist? activeArtist;
+  List<Song> artistSongsList = <Song>[];
+
+  /// 评论：沉浸播放页 / 歌曲菜单进入。
+  List<Comment> comments = <Comment>[];
+  String? commentsForSong;
+
   bool get isLoggedIn => api.isLoggedIn;
 
   /// 首页数据：只走音源插件真实支持的接口（最近播放 + 歌单发现）。
@@ -60,6 +72,99 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 打开歌单详情：按 kind 分派到正确的接口（owned/collected/chart）。
+  Future<void> openPlaylist(Playlist playlist) async {
+    activePlaylist = playlist;
+    playlistSongsList = <Song>[];
+    showLyrics = false;
+    notifyListeners();
+    playlistSongsList = await _soft(
+      playlist.kind == 'chart' ? api.chartSongs(playlist.id) : api.playlistSongs(playlist),
+      <Song>[],
+    );
+    notifyListeners();
+  }
+
+  void closePlaylist() {
+    activePlaylist = null;
+    playlistSongsList = <Song>[];
+    notifyListeners();
+  }
+
+  Future<void> openArtist(String artistCode, {String name = ''}) async {
+    activeArtist = Artist(id: artistCode, name: name.isEmpty ? '歌手' : name);
+    artistSongsList = <Song>[];
+    notifyListeners();
+    final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      _soft<dynamic>(api.artistDetail(artistCode), const Artist(id: '', name: '')),
+      _soft<dynamic>(api.artistSongs(artistCode), <Song>[]),
+    ]);
+    if (results[0] is Artist && (results[0] as Artist).name.isNotEmpty) {
+      activeArtist = results[0] as Artist;
+    }
+    artistSongsList = (results[1] as List).cast<Song>().toList();
+    notifyListeners();
+  }
+
+  void closeArtist() {
+    activeArtist = null;
+    artistSongsList = <Song>[];
+    notifyListeners();
+  }
+
+  /// 从歌曲行点击歌手名进入歌手页；无 artistID 时用歌手名尝试。
+  void openArtistFromSong(Song song) {
+    final code = song.artistIds.isNotEmpty
+        ? song.artistIds.first
+        : (song.artists.isNotEmpty ? song.artists.first : '');
+    if (code.isEmpty) {
+      error = '该歌曲未返回歌手 ID，无法打开歌手页';
+      notifyListeners();
+      return;
+    }
+    openArtist(code, name: song.artists.isNotEmpty ? song.artists.first : '');
+  }
+
+  Future<void> loadComments(String songCode) async {
+    commentsForSong = songCode;
+    comments = <Comment>[];
+    notifyListeners();
+    comments = await _soft(api.comments(songCode), <Comment>[]);
+    notifyListeners();
+  }
+
+  Future<void> toggleFavorite(Song song) async {
+    final next = !song.favorite;
+    song.favorite = next;
+    notifyListeners();
+    try {
+      await api.toggleFavorite(song.id, next);
+      if (next && !favorites.any((s) => s.id == song.id)) {
+        favorites = <Song>[...favorites, song];
+      } else if (!next) {
+        favorites = favorites.where((s) => s.id != song.id).toList();
+      }
+    } catch (_) {
+      song.favorite = !next; // 回滚
+    }
+    notifyListeners();
+  }
+
+  Future<void> createPlaylist(String name) async {
+    await _guard(() async {
+      await api.createPlaylist(name);
+      playlists = await api.playlists();
+    });
+  }
+
+  Future<void> deletePlaylist(String playlistId) async {
+    await _guard(() async {
+      await api.deletePlaylist(playlistId);
+      playlists = playlists.where((p) => p.id != playlistId).toList();
+      if (activePlaylist?.id == playlistId) closePlaylist();
+    });
+  }
+
   Future<T> _soft<T>(Future<T> work, T fallback) async {
     try {
       return await work;
@@ -75,6 +180,42 @@ class AppState extends ChangeNotifier {
         playlists = await api.playlists();
       } catch (_) {
         playlists = <Playlist>[];
+      }
+    });
+  }
+
+  /// 首页 5 张大卡：每张都走真实接口，失败时显示错误状态，不填假歌。
+  Future<void> playCard(String action) async {
+    await _guard(() async {
+      late List<Song> songs;
+      switch (action) {
+        case 'radio':
+          songs = await api.privateRadio(mode: '1');
+          break;
+        case 'daily':
+          songs = await api.dailySongs();
+          break;
+        case 'heart':
+          songs = await api.privateRadio(mode: '2');
+          break;
+        case 'new':
+          songs = discover.newSongs.isNotEmpty
+              ? discover.newSongs
+              : await api.dailySongs();
+          break;
+        case 'hot':
+          songs = await api.similarSongs(
+            audio.current?.id ?? (homeSongs.isNotEmpty ? homeSongs.first.id : ''),
+          );
+          if (songs.isEmpty) songs = discover.newSongs;
+          break;
+        default:
+          songs = homeSongs;
+      }
+      if (songs.isNotEmpty) {
+        await play(songs.first, queue: songs);
+      } else {
+        error = '「$action」接口未返回歌曲（确认已登录 / 网络可用）';
       }
     });
   }
