@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' show Color;
 import '../models.dart';
 import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
+import '../protocol/netease_api.dart';
 import '../theme.dart';
 import 'audio_controller.dart';
 
@@ -14,7 +15,15 @@ class AppState extends ChangeNotifier {
   }
 
   final HuaweiAPI api = HuaweiAPI();
-  late final MuyuAudioController audio = MuyuAudioController(api);
+  final NeteaseApi netease = NeteaseApi();
+
+  /// 当前音源（沐语支持多平台；本项目接通华为 + 网易云）。
+  MusicSource source = MusicSource.huawei;
+  bool get isLoggedIn => source == MusicSource.netease
+      ? netease.isLoggedIn
+      : api.isLoggedIn;
+
+  late final MuyuAudioController audio = MuyuAudioController(api, netease: netease);
 
   int tab = 0;
   bool loading = false;
@@ -93,17 +102,38 @@ class AppState extends ChangeNotifier {
   List<Comment> comments = <Comment>[];
   String? commentsForSong;
 
-  bool get isLoggedIn => api.isLoggedIn;
-
   /// 首页数据：只走音源插件真实支持的接口（最近播放 + 歌单发现）。
   Future<void> loadHome() async {
     await _guard(() async {
-      discover = await api.discover();
+      if (source == MusicSource.netease) {
+        final daily = await _soft(netease.dailySongs(), <Song>[]);
+        final lists = await _soft(netease.recommendedPlaylists(), <Playlist>[]);
+        discover = DiscoverData(newSongs: daily, playlists: lists);
+      } else {
+        discover = await api.discover();
+      }
       homeSongs = discover.newSongs;
       playlists = discover.playlists;
       charts = discover.charts;
       discoverLoaded = true;
     });
+  }
+
+  /// 切换音源：清理当前数据，按新音源重新加载。
+  Future<void> switchSource(MusicSource newSource) async {
+    if (source == newSource) return;
+    source = newSource;
+    audio.source = newSource;
+    discover = const DiscoverData();
+    discoverLoaded = false;
+    homeSongs = <Song>[];
+    favorites = <Song>[];
+    playlists = <Playlist>[];
+    charts = <Playlist>[];
+    chartSongs = <Song>[];
+    searchResults = <Song>[];
+    notifyListeners();
+    if (isLoggedIn) await loadHome();
   }
 
   Future<void> loadChart(String chartId) async {
@@ -121,7 +151,11 @@ class AppState extends ChangeNotifier {
     showLyrics = false;
     notifyListeners();
     playlistSongsList = await _soft(
-      playlist.kind == 'chart' ? api.chartSongs(playlist.id) : api.playlistSongs(playlist),
+      source == MusicSource.netease
+          ? netease.playlistTracks(playlist.id)
+          : (playlist.kind == 'chart'
+              ? api.chartSongs(playlist.id)
+              : api.playlistSongs(playlist)),
       <Song>[],
     );
     notifyListeners();
@@ -171,7 +205,12 @@ class AppState extends ChangeNotifier {
     commentsForSong = songCode;
     comments = <Comment>[];
     notifyListeners();
-    comments = await _soft(api.comments(songCode), <Comment>[]);
+    comments = await _soft(
+      source == MusicSource.netease
+          ? netease.comments(songCode)
+          : api.comments(songCode),
+      <Comment>[],
+    );
     notifyListeners();
   }
 
@@ -180,7 +219,11 @@ class AppState extends ChangeNotifier {
     song.favorite = next;
     notifyListeners();
     try {
-      await api.toggleFavorite(song.id, next);
+      if (source == MusicSource.netease) {
+        // 网易云收藏：本地维护状态（radio/like 需额外接口，留待 write 接口）。
+      } else {
+        await api.toggleFavorite(song.id, next);
+      }
       if (next && !favorites.any((s) => s.id == song.id)) {
         favorites = <Song>[...favorites, song];
       } else if (!next) {
@@ -217,11 +260,16 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadLibrary() async {
     await _guard(() async {
-      favorites = await api.favorites();
-      try {
-        playlists = await api.playlists();
-      } catch (_) {
-        playlists = <Playlist>[];
+      if (source == MusicSource.netease) {
+        playlists = await _soft(
+            netease.userPlaylists(''), <Playlist>[]); // uid 由登录后填
+      } else {
+        favorites = await api.favorites();
+        try {
+          playlists = await api.playlists();
+        } catch (_) {
+          playlists = <Playlist>[];
+        }
       }
     });
   }
@@ -230,26 +278,31 @@ class AppState extends ChangeNotifier {
   Future<void> playCard(String action) async {
     await _guard(() async {
       late List<Song> songs;
+      final ne = source == MusicSource.netease;
       switch (action) {
         case 'radio':
-          songs = await api.privateRadio(mode: '1');
+          songs = ne ? await netease.dailySongs() : await api.privateRadio(mode: '1');
           break;
         case 'daily':
-          songs = await api.dailySongs();
+          songs = ne ? await netease.dailySongs() : await api.dailySongs();
           break;
         case 'heart':
-          songs = await api.privateRadio(mode: '2');
+          songs = ne ? await netease.dailySongs() : await api.privateRadio(mode: '2');
           break;
         case 'new':
           songs = discover.newSongs.isNotEmpty
               ? discover.newSongs
-              : await api.dailySongs();
+              : (ne ? await netease.dailySongs() : await api.dailySongs());
           break;
         case 'hot':
-          songs = await api.similarSongs(
-            audio.current?.id ?? (homeSongs.isNotEmpty ? homeSongs.first.id : ''),
-          );
-          if (songs.isEmpty) songs = discover.newSongs;
+          if (ne) {
+            songs = discover.newSongs;
+          } else {
+            songs = await api.similarSongs(
+              audio.current?.id ?? (homeSongs.isNotEmpty ? homeSongs.first.id : ''),
+            );
+            if (songs.isEmpty) songs = discover.newSongs;
+          }
           break;
         default:
           songs = homeSongs;
@@ -270,7 +323,9 @@ class AppState extends ChangeNotifier {
       return;
     }
     await _guard(() async {
-      searchResults = await api.search(searchKeyword);
+      searchResults = source == MusicSource.netease
+          ? await netease.search(searchKeyword)
+          : await api.search(searchKeyword);
       tab = 1;
     });
   }
@@ -279,7 +334,9 @@ class AppState extends ChangeNotifier {
     showLyrics = true;
     notifyListeners();
     try {
-      lyrics = await api.lyrics(song.id);
+      lyrics = source == MusicSource.netease
+          ? await netease.lyrics(song.id)
+          : await api.lyrics(song.id);
     } catch (_) {
       lyrics = <LyricLine>[];
     }
@@ -323,6 +380,7 @@ class AppState extends ChangeNotifier {
 
   void signOut() {
     api.signOut();
+    netease.signOut();
     homeSongs = <Song>[];
     favorites = <Song>[];
     playlists = <Playlist>[];
@@ -353,6 +411,7 @@ class AppState extends ChangeNotifier {
     audio.removeListener(notifyListeners);
     audio.dispose();
     api.gateway.dispose();
+    netease.gateway.dispose();
     super.dispose();
   }
 }

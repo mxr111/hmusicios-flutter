@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../models_skin.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
@@ -77,7 +78,7 @@ class _HomePageState extends State<HomePage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 108),
       children: [
-        _header(),
+        _header(state),
         const SizedBox(height: 14),
         _searchField(),
         const SizedBox(height: 20),
@@ -133,12 +134,12 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _header() {
+  Widget _header(AppState state) {
     return Row(
       children: [
         const Text('主页', style: MuyuTheme.title),
         const SizedBox(width: 16),
-        const SourceSwitcher(),
+        SourceSwitcher(state: state),
         const Spacer(),
         OutlinedButton.icon(
           onPressed: () {},
@@ -212,42 +213,72 @@ class _HomePageState extends State<HomePage> {
 /// 顶部音源切换：截图里「华为音乐」蓝色胶囊 + 酷狗 K / QQ音乐 / 网易云 圆标。
 /// 按需求只接通华为音乐，其余置灰提示。
 class SourceSwitcher extends StatelessWidget {
-  const SourceSwitcher({super.key});
+  const SourceSwitcher({super.key, required this.state});
+  final AppState state;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          decoration: BoxDecoration(
-            color: MuyuColors.accent.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.graphic_eq, size: 13, color: MuyuColors.accent),
-              SizedBox(width: 5),
-              Text('华为音乐',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: MuyuColors.accent,
-                      fontWeight: FontWeight.w700)),
-            ],
-          ),
+        _sourceChip(
+          label: '华为音乐',
+          icon: Icons.graphic_eq,
+          color: MuyuColors.accent,
+          selected: state.source == MusicSource.huawei,
+          onTap: () => state.switchSource(MusicSource.huawei),
+        ),
+        const SizedBox(width: 8),
+        _sourceChip(
+          label: '网易云',
+          icon: Icons.cloud_queue,
+          color: const Color(0xFFEF4444),
+          selected: state.source == MusicSource.netease,
+          onTap: () => state.switchSource(MusicSource.netease),
         ),
         const SizedBox(width: 8),
         ...<_SourceDotData>[
           const _SourceDotData('K', Color(0xFF3B82F6)),
           const _SourceDotData('Q', Color(0xFFFACC15)),
-          const _SourceDotData('云', Color(0xFFEF4444)),
         ].map((d) => Padding(
               padding: const EdgeInsets.only(right: 6),
               child: _SourceDot(data: d),
             )),
       ],
+    );
+  }
+
+  Widget _sourceChip({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.16) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          border: selected
+              ? Border.all(color: color.withValues(alpha: 0.5))
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 5),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: color,
+                    fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -260,26 +291,28 @@ class _SourceDotData {
 
 class _SourceDot extends StatelessWidget {
   const _SourceDot({required this.data});
-
   final _SourceDotData data;
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: '该音源未接入（本项目仅实现华为音乐）',
-      child: Container(
-        width: 22,
-        height: 22,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: data.color.withValues(alpha: 0.28),
-          shape: BoxShape.circle,
+      message: '该音源未接入（本项目实现华为音乐 + 网易云音乐）',
+      child: Opacity(
+        opacity: 0.45,
+        child: Container(
+          width: 22,
+          height: 22,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: data.color.withValues(alpha: 0.28),
+            shape: BoxShape.circle,
+          ),
+          child: Text(data.label,
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: data.color.withValues(alpha: 0.9))),
         ),
-        child: Text(data.label,
-            style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: data.color.withValues(alpha: 0.9))),
       ),
     );
   }

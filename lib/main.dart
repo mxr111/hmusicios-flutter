@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'models_skin.dart';
 import 'pages/secondary_pages.dart';
 import 'services/app_state.dart';
+import 'widgets/netease_login_sheet.dart';
 import 'theme.dart';
 import 'widgets/home_page.dart';
 import 'widgets/player_bar.dart';
@@ -142,7 +144,9 @@ class AppShell extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => LoginSheet(state: state),
+      builder: (_) => state.source == MusicSource.netease
+          ? NeteaseLoginSheet(state: state)
+          : LoginSheet(state: state),
     );
   }
 

@@ -34,14 +34,28 @@ enum AudioQuality {
       case 'flac':
       case 'lossless':
       case '3':
+      // 网易云 level（REA privilege.go 实测档位串）
+      case 'exhigh':
+      case 'higher':
         return AudioQuality.lossless;
       case 'hr':
       case 'hires':
       case 'hi-res':
+      case 'jymaster':
+      case 'sky':
         return AudioQuality.hiRes;
       default:
         return AudioQuality.standard;
     }
+  }
+
+  /// 从上游码率（br / maxbr，单位 bps）判定档位。
+  /// 网易云：128000=标准，320000=极高/无损，990000+=Hi-Res。
+  /// 与 EXE 的 songQualities / privilege 映射一致（见 NETEASE_AND_QUALITY_DECOMPILED.md）。
+  static AudioQuality fromBitrate(int bps) {
+    if (bps >= 900000) return AudioQuality.hiRes;
+    if (bps >= 320000) return AudioQuality.lossless;
+    return AudioQuality.standard;
   }
 }
 

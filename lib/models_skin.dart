@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
 
+/// 音源（沐语支持 5 家，本项目接通华为 + 网易云；其余按用户约束未接入）。
+enum MusicSource {
+  huawei('华为音乐'),
+  netease('网易云音乐');
+
+  const MusicSource(this.label);
+  final String label;
+}
+
 /// 播放器样式（沐语 4 种，REA 文案实测：新版播放器/经典播放器/封面沉浸/简洁播放器）。
 /// 源码：native_vinyl_player.go / native_folia_player.go / native_minimal_player.go /
 /// native_immersive_lyrics.go；「新增封面沉浸样式，可从歌词页底部栏打开缩略图面板切换」。

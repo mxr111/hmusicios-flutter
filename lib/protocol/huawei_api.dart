@@ -299,35 +299,62 @@ class HuaweiAPI {
     }
   }
 
-  /// 取流（源码事实 tinglan/playback.go）：qualityType "1"=标准(MP3)、
-  /// "3"=无损(FLAC)；主音频用顶层 fileURL，不盲用 fileInfos[0]。
-  /// 分别请求两档，按 playQuality/qualityType + type(codec) 判定实际档位。
-  Future<List<HuaweiAudioFile>> audioFiles(String songCode) async {
+  /// 取流：档位由上游决定（与 EXE locateQuality / FillSongQualities 一致）。
+  /// - upstreamQualities：上游字段（privilege/size_*/level/br）派生的可用档位集合；
+  ///   缺省时按标准档请求一次，绝不本地写死「标准+无损两档循环」。
+  /// - 实际档位以下游响应的 playQuality/qualityType/level/br + codec 为准。
+  Future<List<HuaweiAudioFile>> audioFiles(
+    String songCode, {
+    Set<AudioQuality>? upstreamQualities,
+  }) async {
     final out = <HuaweiAudioFile>[];
-    for (final q in <AudioQuality>[AudioQuality.standard, AudioQuality.lossless]) {
+    // 只请求上游声明可用的档位；按从高到低，避免无谓请求。
+    final wanted = (upstreamQualities != null
+            ? upstreamQualities.toList()
+            : <AudioQuality>[AudioQuality.standard])
+      ..sort((a, b) => b.index.compareTo(a.index)); // hiRes > lossless > standard
+
+    for (final q in wanted) {
       final json = await gateway.request(HuaweiPaths.playUrl,
           body: <String, dynamic>{
             'contentCode': songCode,
             'contentType': '1',
-            'qualityType': q.typeCode, // 1 或 3
+            'qualityType': q.typeCode, // 华为：1 标准 / 3 无损·Hi-Res
           });
-      // 顶层 fileURL 是音频（源码明确）；校验资源域名。
-      final link = HuaweiGateway.firstUrl(json, const ['fileURL', 'fileUrl', 'playURL']);
-      if (link == null) continue;
-      if (!_safeAudioUrl(link)) continue;
 
-      final code = HuaweiGateway.firstString(json, const ['playQuality', 'qualityType']) ?? '';
+      // 响应里必须给出音频 URL；顶层 fileURL 是音频（源码明确）。
+      final link = HuaweiGateway.firstUrl(
+          json, const ['fileURL', 'fileUrl', 'playURL', 'url']);
+      if (link == null || !_safeAudioUrl(link)) continue;
+
+      // 实际档位以响应为准（上游 decisively 决定），综合 code / level / br / codec。
+      final code = HuaweiGateway.firstString(
+              json, const ['playQuality', 'qualityType', 'level']) ??
+          '';
+      final br = HuaweiGateway.firstInt(json, const ['br', 'bitrate', 'size']);
       final codec = (HuaweiGateway.firstString(json, const ['type']) ?? '').toLowerCase();
-      // 源码判定：code=3 且 codec 含 flac -> lossless；code=1 且非 flac -> standard。
+
       AudioQuality actual;
-      if (code == '3' || codec.contains('flac')) {
-        actual = AudioQuality.lossless;
+      if (br != null && br > 0 && (code.isEmpty || code == '0')) {
+        actual = AudioQuality.fromBitrate(br); // 网易云按码率
+      } else if (code == '3' ||
+          codec.contains('flac') ||
+          AudioQuality.fromCode(code) != AudioQuality.standard) {
+        actual = AudioQuality.fromCode(code.isEmpty ? (codec.contains('flac') ? 'flac' : '') : code);
       } else {
         actual = AudioQuality.standard;
       }
+      // 不超过上游声明的最高档（防止响应虚报）。
+      if (upstreamQualities != null && !upstreamQualities.contains(actual) &&
+          upstreamQualities.isNotEmpty) {
+        actual = upstreamQualities.reduce((a, b) => a.index > b.index ? a : b);
+      }
       if (!out.any((f) => f.quality == actual)) {
-        final size = HuaweiGateway.firstInt(json, const ['size', 'fileSize']) ?? 0;
-        out.add(HuaweiAudioFile(quality: actual, url: link, sizeBytes: size));
+        out.add(HuaweiAudioFile(
+          quality: actual,
+          url: link,
+          sizeBytes: HuaweiGateway.firstInt(json, const ['size', 'fileSize']) ?? 0,
+        ));
       }
     }
     if (out.isEmpty) {
@@ -488,6 +515,55 @@ class HuaweiAPI {
 
   // MARK: - 容错解析
 
+  /// 从上游字段派生该歌曲的可用档位（与 EXE songQualities / FillSongQualities 一致）。
+  /// 档位完全由上游决定：华为 size_* / 网易 privilege.level·br·maxbr·chargeInfoList。
+  /// 只有上游完全没给档位信息时才退回 standard（保守默认）。
+  static Set<AudioQuality> qualitiesFromUpstream(Map<String, dynamic> d) {
+    final out = <AudioQuality>{};
+
+    // 1) 华为：size_* 字段非零即提供该档。
+    for (final q in AudioQuality.values) {
+      final v = d[q.sizeKey];
+      if (v != null && v != 0 && v != '0') out.add(q);
+    }
+
+    // 2) 网易云：privilege / songPrivilege 对象里的 level、br、maxbr。
+    void applyPrivilege(Map<String, dynamic> p) {
+      final level = HuaweiGateway.firstString(p, const ['level', 'quality', 'flacLevel']);
+      if (level != null && level.isNotEmpty) {
+        out.add(AudioQuality.fromCode(level));
+      }
+      final br = HuaweiGateway.firstInt(p, const ['br', 'maxbr', 'maxBr']);
+      if (br != null && br > 0) out.add(AudioQuality.fromBitrate(br));
+      final dl = p['downloadMaxBr'] ?? p['flacMaxBr'];
+      if (dl is num && dl > 0) out.add(AudioQuality.fromBitrate(dl.toInt()));
+    }
+
+    for (final key in const ['privilege', 'songPrivilege']) {
+      final v = d[key];
+      if (v is Map<String, dynamic>) applyPrivilege(v);
+    }
+    // 顶层 level/br/maxbr（部分详情直接平铺）。
+    applyPrivilege(d);
+
+    // 3) chargeInfoList：付费档位列表，每项含 level/br。
+    final charges = d['chargeInfoList'];
+    if (charges is List) {
+      for (final c in charges) {
+        if (c is Map<String, dynamic>) applyPrivilege(c);
+      }
+    }
+
+    // 4) 通用档位字符串（quality/playQuality/minPrivilege/最低权益）。
+    final tier = HuaweiGateway.firstString(
+        d, const ['quality', 'playQuality', 'minPrivilege', 'maxQuality']);
+    if (tier != null) out.add(AudioQuality.fromCode(tier));
+
+    // 上游无任何档位信息：保守退回标准档。
+    if (out.isEmpty) out.add(AudioQuality.standard);
+    return out;
+  }
+
   static Song parseSong(Map<String, dynamic> d) {
     final artists = <String>[];
     final artistIds = <String>[];
@@ -521,14 +597,7 @@ class HuaweiAPI {
           d, const ['artistID', 'artistCode', 'singerId']);
       if (singleId != null) artistIds.add(singleId);
     }
-    final qualities = <AudioQuality>{AudioQuality.standard};
-    for (final q in AudioQuality.values) {
-      final v = d[q.sizeKey];
-      if (v != null && v != 0 && v != '0') qualities.add(q);
-    }
-    final tier = HuaweiGateway.firstString(d,
-        const ['quality', 'playQuality', 'minPrivilege']);
-    if (tier != null) qualities.add(AudioQuality.fromCode(tier));
+    final qualities = qualitiesFromUpstream(d);
 
     return Song(
       // 沐语 normalizeHomeSongs 兼容两套字段：精简 ID/NM/pic 与完整 contentID/contentName/middleImgURL。

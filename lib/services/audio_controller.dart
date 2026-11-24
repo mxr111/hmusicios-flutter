@@ -4,12 +4,15 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models.dart';
+import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
+import '../protocol/netease_api.dart';
 import 'lease_proxy.dart';
 
 /// 与沐语 MyGo audio.Player 对等：取流 → 租约代理 → 播放器。
 class MuyuAudioController extends ChangeNotifier {
-  MuyuAudioController(this.api) {
+  MuyuAudioController(this.api, {NeteaseApi? netease})
+      : netease = netease ?? NeteaseApi() {
     _player.onPositionChanged.listen((p) {
       position = p;
       notifyListeners();
@@ -26,6 +29,8 @@ class MuyuAudioController extends ChangeNotifier {
   }
 
   final HuaweiAPI api;
+  final NeteaseApi netease;
+  MusicSource source = MusicSource.huawei;
   final AudioPlayer _player = AudioPlayer();
 
   Song? current;
@@ -79,10 +84,14 @@ class MuyuAudioController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final files = await api.audioFiles(song.id);
-      final wanted = song.qualities.contains(quality)
+      // 档位由上游决定：把 Song 从上游字段解析出的档位集合传给取流层。
+      final List<HuaweiAudioFile> files = source == MusicSource.netease
+          ? await netease.audioFiles(song, quality: quality)
+          : await api.audioFiles(song.id, upstreamQualities: song.qualities);
+      final supported = files.isNotEmpty ? files.map((f) => f.quality).toSet() : song.qualities;
+      final wanted = supported.contains(quality)
           ? quality
-          : AudioQuality.standard;
+          : supported.reduce((a, b) => a.index > b.index ? a : b);
       HuaweiAudioFile chosen = files.firstWhere(
         (f) => f.quality == wanted,
         orElse: () => files.first,

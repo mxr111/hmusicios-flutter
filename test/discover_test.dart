@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 
 void main() {
@@ -118,5 +119,48 @@ void main() {
     expect(d.playlists, isEmpty);
     expect(d.charts, isEmpty);
     expect(d.radio, isEmpty);
+  });
+
+  upstreamQualityTests();
+}
+
+void upstreamQualityTests() {
+  test('上游音质：网易云 privilege.level 决定档位（非本地写死）', () {
+    final q = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'privilege': <String, dynamic>{'level': 'exhigh'},
+    });
+    expect(q.contains(AudioQuality.lossless), isTrue);
+  });
+
+  test('上游音质：maxbr 码率决定档位（990000 → Hi-Res）', () {
+    final q = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'songPrivilege': <String, dynamic>{'maxbr': 990000},
+    });
+    expect(q.contains(AudioQuality.hiRes), isTrue);
+  });
+
+  test('上游音质：chargeInfoList 付费档位参与判定', () {
+    final q = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'chargeInfoList': <dynamic>[
+        <String, dynamic>{'level': 'hires'},
+        <String, dynamic>{'level': 'lossless'},
+      ],
+    });
+    expect(q.contains(AudioQuality.hiRes), isTrue);
+    expect(q.contains(AudioQuality.lossless), isTrue);
+  });
+
+  test('上游无任何档位字段时保守退回标准档', () {
+    final q = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'contentID': 'x',
+      'contentName': 'y',
+    });
+    expect(q, <AudioQuality>{AudioQuality.standard});
+  });
+
+  test('码率到档位映射遵循网易云 level 体系', () {
+    expect(AudioQuality.fromBitrate(128000), AudioQuality.standard);
+    expect(AudioQuality.fromBitrate(320000), AudioQuality.lossless);
+    expect(AudioQuality.fromBitrate(990000), AudioQuality.hiRes);
   });
 }
