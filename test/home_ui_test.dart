@@ -39,10 +39,40 @@ void main() {
 
     expect(find.byType(HomeCard), findsNWidgets(5));
     expect(find.text('为你推荐'), findsOneWidget);
+    expect(find.text('推荐歌单'), findsOneWidget);
     expect(find.textContaining('晴天'), findsWidgets);
     expect(find.textContaining('每日30首'), findsWidgets);
     expect(find.textContaining('热歌榜'), findsWidgets);
 
+    state.dispose();
+  });
+
+  testWidgets('iPhone 窄屏主页不溢出，底部仍显示推荐歌单', (tester) async {
+    final state = AppState();
+    final song = Song(
+      id: 's1',
+      name: '晴天',
+      artists: const <String>['周杰伦'],
+    );
+    state.homeSongs = <Song>[song];
+    state.discover = DiscoverData(
+      newSongs: <Song>[song],
+      radio: <Song>[song],
+      playlists: const <Playlist>[
+        Playlist(id: 'a001', name: '每日30首', kind: 'collected'),
+        Playlist(id: 'a002', name: '推荐歌单二', kind: 'collected'),
+      ],
+    );
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: Scaffold(body: HomePage(state: state)),
+    ));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('推荐歌单'), findsOneWidget);
+    expect(find.text('每日30首'), findsWidgets);
     state.dispose();
   });
 

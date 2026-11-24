@@ -1,7 +1,7 @@
 name: muyu_flutter
 description: "沐语 Flutter 复刻版：基于 REA 对 Muyu.exe 的逆向还原，仅接华为音乐数据源。"
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.13.4

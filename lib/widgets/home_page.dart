@@ -6,8 +6,8 @@ import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
 
-/// 主页：截图里的「标题 + 音源切换 + 搜索框 + 四张推荐大卡片 +
-/// 为你推荐(1/5) + 歌曲列表」。无凭据时也保留完整离线占位界面。
+/// 主页：顶部标题/音源/搜索 + 5 张推荐卡 + 「为你推荐」5 首/页 +
+/// 底部「推荐歌单」网格。所有内容来自真实华为接口。
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.state});
 
@@ -19,6 +19,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final TextEditingController _search = TextEditingController();
+  int _recPage = 1;
 
   @override
   void dispose() {
@@ -29,63 +30,88 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    // 首页列表只显示真实接口数据，不再用硬编码歌曲冒充（用户明确要求）。
     final songs = state.homeSongs;
+    final pageCount = songs.isEmpty ? 1 : ((songs.length + 4) ~/ 5);
+    final page = _recPage.clamp(1, pageCount);
+    final visibleSongs = songs.skip((page - 1) * 5).take(5).toList();
+    final playlists = state.discover.playlists;
     final cards = _cards(state);
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 18, 24, 108),
+      padding: const EdgeInsets.only(bottom: 120),
       children: [
         _header(context, state),
-        const SizedBox(height: 14),
-        _searchField(),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: MuyuDims.cardHeight,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: cards.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 16),
-            itemBuilder: (context, i) => HomeCard(
-              spec: cards[i],
-              onPlay: () => _playCard(state, cards[i].action),
-            ),
-          ),
-        ),
-        const SizedBox(height: 22),
-        _sectionHeader(),
-        if (state.loading)
-          const Padding(
-            padding: EdgeInsets.all(18),
-            child: Center(child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2))),
-          ),
-        if (state.error != null)
-          StatePanel(
-            message: state.error!,
-            onRetry: state.loadHome,
-            actionLabel: '重试',
-          ),
-        if (!state.isLoggedIn)
-          const StatePanel(
-            message: '尚未登录华为账号。请在「我的」中用华为账号扫码登录后加载真实曲库。',
-          ),
-        if (state.isLoggedIn && !state.loading && songs.isEmpty)
-          StatePanel(
-            message: '首页接口未返回歌曲，请点击重试或到「音乐厅」查看其他板块。',
-            onRetry: state.loadHome,
-            actionLabel: '重试',
-          ),
-        ...List<Widget>.generate(
-          songs.length,
-          (i) => SongRow(
-            song: songs[i],
-            index: i,
-            onPlay: () => state.play(songs[i], queue: songs),
-            onFavorite: () => state.toggleFavorite(songs[i]),
-            onArtistTap: () => state.openArtistFromSong(songs[i]),
+        const SizedBox(height: 16),
+        _heroCards(cards),
+        const SizedBox(height: 24),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _sectionRow(
+                title: '为你推荐',
+                trailing: songs.isEmpty ? '暂无数据' : '$page/$pageCount',
+                onPrevious: page > 1
+                    ? () => setState(() => _recPage = page - 1)
+                    : null,
+                onNext: page < pageCount
+                    ? () => setState(() => _recPage = page + 1)
+                    : null,
+              ),
+              if (state.loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              if (state.error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: StatePanel(
+                    message: state.error!,
+                    onRetry: state.loadHome,
+                    actionLabel: '重试',
+                  ),
+                ),
+              if (!state.isLoggedIn)
+                const StatePanel(
+                  message: '尚未登录华为账号。请到「我的」扫码登录后加载真实曲库。',
+                )
+              else if (!state.loading && songs.isEmpty)
+                StatePanel(
+                  message: '首页接口未返回歌曲，请重试。',
+                  onRetry: state.loadHome,
+                  actionLabel: '重试',
+                )
+              else
+                ...visibleSongs.map(
+                  (song) => SongRow(
+                    song: song,
+                    index: songs.indexOf(song),
+                    onPlay: () => state.play(song, queue: songs),
+                    onFavorite: () => state.toggleFavorite(song),
+                    onArtistTap: () => state.openArtistFromSong(song),
+                  ),
+                ),
+              const SizedBox(height: 26),
+              _sectionRow(
+                title: '推荐歌单',
+                trailing: playlists.isEmpty ? '暂无数据' : '共 ${playlists.length} 个',
+                onNext: () {
+                  state.selectTab(2);
+                },
+                nextTooltip: '去音乐厅看榜单',
+              ),
+              const SizedBox(height: 12),
+              if (playlists.isEmpty)
+                StatePanel(
+                  message: '华为接口未返回推荐歌单。',
+                  onRetry: state.loadHome,
+                  actionLabel: '重试',
+                )
+              else
+                _playlistGrid(playlists),
+            ],
           ),
         ),
       ],
@@ -93,27 +119,167 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _header(BuildContext context, AppState state) {
+    final pal = state.palette;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: <Color>[
+            pal.accent.withValues(alpha: 0.14),
+            pal.surface.withValues(alpha: 0.9),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('主页',
+                  style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: pal.text)),
+              const SizedBox(width: 16),
+              Flexible(child: SourceSwitcher(state: state)),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () {
+                  state.selectTab(1);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('千语取歌：输入歌曲或歌手名开始搜索')),
+                  );
+                },
+                icon: const Icon(Icons.auto_awesome, size: 14),
+                label: const Text('千语取歌', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: TextField(
+              controller: _search,
+              onSubmitted: (value) => state.doSearch(value),
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: '搜索音乐',
+                hintStyle: const TextStyle(
+                    fontSize: 13, color: MuyuColors.inkMuted),
+                prefixIcon: const Icon(Icons.search,
+                    size: 18, color: MuyuColors.inkMuted),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.92),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heroCards(List<HomeCardSpec> cards) {
+    return SizedBox(
+      height: MuyuDims.cardHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        itemCount: cards.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 16),
+        itemBuilder: (context, i) => HomeCard(
+          spec: cards[i],
+          onPlay: () => _playCard(widget.state, cards[i].action),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionRow({
+    required String title,
+    required String trailing,
+    VoidCallback? onPrevious,
+    VoidCallback? onNext,
+    String? nextTooltip,
+  }) {
     return Row(
       children: [
-        const Text('主页', style: MuyuTheme.title),
-        const SizedBox(width: 16),
-        Flexible(child: SourceSwitcher(state: state)),
+        Text(title, style: MuyuTheme.section),
         const Spacer(),
-        OutlinedButton.icon(
-          onPressed: () {
-            state.selectTab(1);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('千语取歌：输入歌曲或歌手名开始搜索')),
-            );
-          },
-          icon: const Icon(Icons.auto_awesome, size: 14),
-          label: const Text('千语取歌', style: TextStyle(fontSize: 12)),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        Text(trailing, style: MuyuTheme.muted),
+        if (onPrevious != null)
+          TinyIconButton(icon: Icons.chevron_left, onTap: onPrevious),
+        if (onNext != null)
+          TinyIconButton(
+            icon: Icons.chevron_right,
+            onTap: onNext,
+            tooltip: nextTooltip,
           ),
-        ),
       ],
+    );
+  }
+
+  Widget _playlistGrid(List<Playlist> playlists) {
+    final width = MediaQuery.of(context).size.width;
+    final columns = width > 1200 ? 6 : (width > 900 ? 5 : 3);
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        childAspectRatio: width > 900 ? 0.78 : 0.62,
+        mainAxisSpacing: 16,
+        crossAxisSpacing: 16,
+      ),
+      itemCount: playlists.length,
+      itemBuilder: (context, i) {
+        final playlist = playlists[i];
+        return InkWell(
+          onTap: () => widget.state.openPlaylist(playlist),
+          borderRadius: BorderRadius.circular(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, box) => CoverArt(
+                    url: playlist.cover,
+                    size: box.maxWidth,
+                    radius: 12,
+                    seed: i,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                playlist.name.isEmpty ? '未命名歌单' : playlist.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: MuyuColors.ink),
+              ),
+              if (playlist.songCount > 0)
+                Text('${playlist.songCount} 首', style: MuyuTheme.muted),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -186,59 +352,6 @@ class _HomePageState extends State<HomePage> {
     return null;
   }
 
-  Widget _searchField() {
-    return SizedBox(
-      width: 260,
-      child: TextField(
-        controller: _search,
-        onSubmitted: (v) => widget.state.doSearch(v),
-        style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          hintText: '搜索音乐',
-          hintStyle: const TextStyle(fontSize: 13, color: MuyuColors.inkMuted),
-          prefixIcon: const Icon(Icons.search, size: 18, color: MuyuColors.inkMuted),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(vertical: 10),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(22),
-            borderSide: BorderSide.none,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _sectionHeader() {
-    final state = widget.state;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          const Text('为你推荐', style: MuyuTheme.section),
-          const Spacer(),
-          Text('${state.homePage}/5', style: MuyuTheme.muted),
-          TinyIconButton(
-            icon: Icons.chevron_left,
-            onTap: () {
-              if (state.homePage > 1) {
-                setState(() => state.homePage--);
-              }
-            },
-          ),
-          TinyIconButton(
-            icon: Icons.chevron_right,
-            onTap: () {
-              if (state.homePage < 5) {
-                setState(() => state.homePage++);
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _playCard(AppState state, String action) async {
     switch (action) {
       case 'daily':
@@ -301,37 +414,37 @@ class SourceSwitcher extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-        _sourceChip(
-          label: '华为音乐',
-          icon: Icons.graphic_eq,
-          color: MuyuColors.accent,
-          selected: state.source == MusicSource.huawei,
-          onTap: () => state.switchSource(MusicSource.huawei),
-        ),
-        const SizedBox(width: 8),
-        _sourceChip(
-          label: '网易云',
-          icon: Icons.cloud_queue,
-          color: const Color(0xFFEF4444),
-          selected: state.source == MusicSource.netease,
-          onTap: () => state.switchSource(MusicSource.netease),
-        ),
-        const SizedBox(width: 8),
-        _sourceChip(
-          label: '酷狗',
-          icon: Icons.music_note,
-          color: const Color(0xFF3B82F6),
-          selected: state.source == MusicSource.kugou,
-          onTap: () => state.switchSource(MusicSource.kugou),
-        ),
-        const SizedBox(width: 8),
-        _sourceChip(
-          label: 'QQ',
-          icon: Icons.music_note,
-          color: const Color(0xFFFACC15),
-          selected: state.source == MusicSource.qq,
-          onTap: () => state.switchSource(MusicSource.qq),
-        ),
+          _sourceChip(
+            label: '华为音乐',
+            icon: Icons.graphic_eq,
+            color: MuyuColors.accent,
+            selected: state.source == MusicSource.huawei,
+            onTap: () => state.switchSource(MusicSource.huawei),
+          ),
+          const SizedBox(width: 8),
+          _sourceChip(
+            label: '网易云',
+            icon: Icons.cloud_queue,
+            color: const Color(0xFFEF4444),
+            selected: state.source == MusicSource.netease,
+            onTap: () => state.switchSource(MusicSource.netease),
+          ),
+          const SizedBox(width: 8),
+          _sourceChip(
+            label: '酷狗',
+            icon: Icons.music_note,
+            color: const Color(0xFF3B82F6),
+            selected: state.source == MusicSource.kugou,
+            onTap: () => state.switchSource(MusicSource.kugou),
+          ),
+          const SizedBox(width: 8),
+          _sourceChip(
+            label: 'QQ',
+            icon: Icons.music_note,
+            color: const Color(0xFFFACC15),
+            selected: state.source == MusicSource.qq,
+            onTap: () => state.switchSource(MusicSource.qq),
+          ),
         ],
       ),
     );
@@ -445,8 +558,7 @@ class HomeCard extends StatelessWidget {
                         color: Colors.white.withValues(alpha: 0.28),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.play_arrow,
-                          size: 22, color: fg),
+                      child: Icon(Icons.play_arrow, size: 22, color: fg),
                     ),
                   ),
                 ],
@@ -467,7 +579,8 @@ class HomeCard extends StatelessWidget {
                 fontWeight: FontWeight.w300,
                 color: fg.withValues(alpha: 0.92)));
       case 'heart':
-        return Icon(Icons.favorite, size: 84, color: fg.withValues(alpha: 0.92));
+        return Icon(Icons.favorite,
+            size: 84, color: fg.withValues(alpha: 0.92));
       case 'radio':
         return Padding(
           padding: const EdgeInsets.only(bottom: 26),
