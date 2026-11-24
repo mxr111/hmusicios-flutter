@@ -408,6 +408,11 @@ class _HomePageState extends State<HomePage> {
         }
         return;
       case 'hot':
+        if (state.discover.hot.isNotEmpty) {
+          await state.play(state.discover.hot.first,
+              queue: state.discover.hot);
+          return;
+        }
         final chart = _firstWhereOrNull(
             state.discover.charts, (Playlist p) => p.name.contains('热歌'));
         if (chart != null) {
@@ -460,80 +465,107 @@ class SourceSwitcher extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sources = <_SourceSpec>[
+      const _SourceSpec(
+        source: MusicSource.huawei,
+        label: '华为音乐',
+        icon: Icons.graphic_eq,
+        color: MuyuColors.accent,
+      ),
+      const _SourceSpec(
+        source: MusicSource.netease,
+        label: '网易云',
+        icon: Icons.cloud_queue,
+        color: Color(0xFFEF4444),
+      ),
+      const _SourceSpec(
+        source: MusicSource.kugou,
+        label: '酷狗',
+        icon: Icons.music_note,
+        color: Color(0xFF3B82F6),
+      ),
+      const _SourceSpec(
+        source: MusicSource.qq,
+        label: 'QQ',
+        icon: Icons.music_note,
+        color: Color(0xFFFACC15),
+      ),
+    ];
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _sourceChip(
-            label: '华为音乐',
-            icon: Icons.graphic_eq,
-            color: MuyuColors.accent,
-            selected: state.source == MusicSource.huawei,
-            onTap: () => state.switchSource(MusicSource.huawei),
-          ),
-          const SizedBox(width: 8),
-          _sourceChip(
-            label: '网易云',
-            icon: Icons.cloud_queue,
-            color: const Color(0xFFEF4444),
-            selected: state.source == MusicSource.netease,
-            onTap: () => state.switchSource(MusicSource.netease),
-          ),
-          const SizedBox(width: 8),
-          _sourceChip(
-            label: '酷狗',
-            icon: Icons.music_note,
-            color: const Color(0xFF3B82F6),
-            selected: state.source == MusicSource.kugou,
-            onTap: () => state.switchSource(MusicSource.kugou),
-          ),
-          const SizedBox(width: 8),
-          _sourceChip(
-            label: 'QQ',
-            icon: Icons.music_note,
-            color: const Color(0xFFFACC15),
-            selected: state.source == MusicSource.qq,
-            onTap: () => state.switchSource(MusicSource.qq),
-          ),
+          for (final item in sources) ...[
+            if (state.source == item.source)
+              _sourcePill(item)
+            else
+              _sourceDot(item),
+            const SizedBox(width: 8),
+          ],
         ],
       ),
     );
   }
 
-  Widget _sourceChip({
-    required String label,
-    required IconData icon,
-    required Color color,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
+  Widget _sourcePill(_SourceSpec item) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () => state.switchSource(item.source),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.16) : Colors.transparent,
+          color: item.color.withValues(alpha: 0.16),
           borderRadius: BorderRadius.circular(16),
-          border: selected
-              ? Border.all(color: color.withValues(alpha: 0.5))
-              : null,
+          border: Border.all(color: item.color.withValues(alpha: 0.5)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 13, color: color),
+            Icon(item.icon, size: 13, color: item.color),
             const SizedBox(width: 5),
-            Text(label,
+            Text(item.label,
                 style: TextStyle(
                     fontSize: 11,
-                    color: color,
+                    color: item.color,
                     fontWeight: FontWeight.w700)),
           ],
         ),
       ),
     );
   }
+
+  Widget _sourceDot(_SourceSpec item) {
+    return Tooltip(
+      message: item.label,
+      child: GestureDetector(
+        onTap: () => state.switchSource(item.source),
+        child: Container(
+          width: 23,
+          height: 23,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: item.color.withValues(alpha: 0.14),
+            border: Border.all(color: item.color.withValues(alpha: 0.55)),
+          ),
+          child: Icon(item.icon, size: 13, color: item.color),
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceSpec {
+  const _SourceSpec({
+    required this.source,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final MusicSource source;
+  final String label;
+  final IconData icon;
+  final Color color;
 }
 
 /// 首页大卡片
