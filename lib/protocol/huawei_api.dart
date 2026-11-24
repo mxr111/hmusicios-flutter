@@ -564,7 +564,8 @@ class HuaweiAPI {
     return out;
   }
 
-  static Song parseSong(Map<String, dynamic> d) {
+  static Song parseSong(Map<String, dynamic> d,
+      {MusicSourceLabel source = MusicSourceLabel.huawei}) {
     final artists = <String>[];
     final artistIds = <String>[];
     // REA HomeSongs：artistNamePairs / arts 里同时含 artistID 与 artistName。
@@ -628,6 +629,10 @@ class HuaweiAPI {
       lyricUrl: HuaweiGateway.firstUrl(d,
           const ['lyricAddress', 'lyricUrl', 'lrcUrl']),
       favorite: d['favorite'] == true || d['isFavorite'] == true,
+      source: source,
+      member: d['isVip'] == true ||
+          d['vip'] == true ||
+          (HuaweiGateway.firstInt(d, const ['fee']) ?? 0) > 0,
     );
   }
 

@@ -94,6 +94,17 @@ class AppState extends ChangeNotifier {
   Playlist? activePlaylist;
   List<Song> playlistSongsList = <Song>[];
 
+  /// 收藏页平台筛选（沐语实测：我的 → 收藏 → 按平台卡片进入）。
+  MusicSourceLabel? favoriteFilter;
+  void openFavorites(MusicSourceLabel source) {
+    favoriteFilter = source;
+    notifyListeners();
+  }
+  void closeFavorites() {
+    favoriteFilter = null;
+    notifyListeners();
+  }
+
   /// 歌手详情：歌手页的歌曲与专辑入口。
   Artist? activeArtist;
   List<Song> artistSongsList = <Song>[];

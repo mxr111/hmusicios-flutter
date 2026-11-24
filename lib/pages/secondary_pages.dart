@@ -281,20 +281,90 @@ class MinePage extends StatelessWidget {
             onTap: onSettings,
           ),
         const SizedBox(height: 12),
-        Text('我喜欢的音乐',
-            style: MuyuTheme.section),
-        const SizedBox(height: 8),
-        if (state.isLoggedIn && favs.isEmpty)
-          const StatePanel(message: '收藏列表为空，可在播放条点击 ♥ 收藏歌曲。'),
-        ...List<Widget>.generate(
-          favs.length,
-          (i) => SongRow(
-            song: favs[i],
-            index: i,
-            onPlay: () => state.play(favs[i], queue: favs),
+        if (state.favoriteFilter == null) ...[
+          Row(
+            children: [
+              const Text('收藏', style: MuyuTheme.section),
+              const Spacer(),
+              Text('按平台查看', style: MuyuTheme.muted),
+            ],
           ),
-        ),
+          const SizedBox(height: 12),
+          _favoritesGrid(context, favs),
+        ] else ...[
+          _filteredFavorites(context, favs, state.favoriteFilter!),
+        ],
       ],
+    );
+  }
+
+  /// 平台收藏卡（沐语实测：封面拼贴 + 来源图标 + 「收藏」+ 歌曲数）。
+  Widget _favoritesGrid(BuildContext context, List<Song> favs) {
+    final bySource = <MusicSourceLabel, List<Song>>{};
+    for (final s in favs) {
+      bySource.putIfAbsent(s.source, () => <Song>[]).add(s);
+    }
+    // 即使某平台为空也显示卡片（与沐语一致：华为/网易云各一张收藏卡）。
+    final sources = <MusicSourceLabel>{
+      MusicSourceLabel.huawei,
+      MusicSourceLabel.netease,
+      ...bySource.keys,
+    }.toList();
+
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: MediaQuery.of(context).size.width > 700 ? 4 : 2,
+      mainAxisSpacing: 14,
+      crossAxisSpacing: 14,
+      childAspectRatio: 1.05,
+      children: sources.map((src) {
+        final songs = bySource[src] ?? <Song>[];
+        final cover = songs.isNotEmpty ? songs.first.cover : null;
+        return GestureDetector(
+          onTap: () => state.openFavorites(src),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: cover == null
+                      ? Container(
+                          color: src.color.withValues(alpha: 0.16),
+                          child: Center(
+                            child: Icon(src.icon, size: 48, color: src.color),
+                          ),
+                        )
+                      : Image.network(cover.toString(), fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            color: src.color.withValues(alpha: 0.16),
+                            child: Icon(src.icon, size: 48, color: src.color),
+                          )),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(src.icon, size: 14, color: src.color),
+                  const SizedBox(width: 5),
+                  Text('收藏', style: MuyuTheme.body),
+                ],
+              ),
+              Text('${songs.length} 首', style: MuyuTheme.muted),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _filteredFavorites(
+      BuildContext context, List<Song> favs, MusicSourceLabel source) {
+    return _FavoriteList(
+      songs: favs.where((s) => s.source == source).toList(),
+      source: source,
+      state: state,
     );
   }
 }
@@ -801,6 +871,96 @@ class AppearancePage extends StatelessWidget {
           if (v != null) onChanged(v);
         },
       ),
+    );
+  }
+}
+
+/// 平台收藏歌曲列表（沐语实测：返回箭头 + 搜索当前歌单 + 「歌曲 会员 音质」列头）。
+class _FavoriteList extends StatefulWidget {
+  const _FavoriteList({
+    required this.songs,
+    required this.source,
+    required this.state,
+  });
+  final List<Song> songs;
+  final MusicSourceLabel source;
+  final AppState state;
+
+  @override
+  State<_FavoriteList> createState() => _FavoriteListState();
+}
+
+class _FavoriteListState extends State<_FavoriteList> {
+  final TextEditingController _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _search.text.trim();
+    final songs = query.isEmpty
+        ? widget.songs
+        : widget.songs
+            .where((s) =>
+                s.name.contains(query) || s.artistText.contains(query))
+            .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: widget.state.closeFavorites,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: '搜索当前歌单',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(22),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              const Expanded(child: Text('歌曲', style: MuyuTheme.muted)),
+              SizedBox(width: 60, child: Text('会员', style: MuyuTheme.muted)),
+              SizedBox(width: 60, child: Text('音质', style: MuyuTheme.muted)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        if (songs.isEmpty)
+          StatePanel(message: query.isEmpty ? '该平台暂无收藏歌曲' : '没有匹配的歌曲')
+        else
+          ...List<Widget>.generate(
+            songs.length,
+            (i) => SongRow(
+              song: songs[i],
+              index: i,
+              onPlay: () => widget.state.play(songs[i], queue: songs),
+            ),
+          ),
+      ],
     );
   }
 }

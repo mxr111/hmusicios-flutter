@@ -291,6 +291,8 @@ class NeteaseApi {
       cover: cover,
       durationMs: duration is num ? duration.toInt() : 0,
       qualities: HuaweiAPI.qualitiesFromUpstream(merged),
+      source: MusicSourceLabel.netease,
+      member: (d['fee'] is num && (d['fee'] as num) > 0),
     );
   }
 

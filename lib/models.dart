@@ -1,5 +1,18 @@
 import 'package:flutter/material.dart';
 
+/// 歌曲来源平台（沐语实测：收藏页每首歌/每个歌单带来源图标）。
+enum MusicSourceLabel {
+  huawei('华为', Color(0xFFE8406A), Icons.graphic_eq),
+  netease('网易云', Color(0xFF9B2C2C), Icons.cloud_queue),
+  kugou('酷狗', Color(0xFF3B82F6), Icons.music_note),
+  qq('QQ', Color(0xFFFACC15), Icons.music_note);
+
+  const MusicSourceLabel(this.label, this.color, this.icon);
+  final String label;
+  final Color color;
+  final IconData icon;
+}
+
 /// 播放模式：REA 文案观察到「列表循环 / 随机播放 / 单曲」三种。
 enum PlayMode {
   listLoop('列表循环', Icons.repeat),
@@ -82,6 +95,8 @@ class Song {
     this.qualities = const <AudioQuality>{AudioQuality.standard},
     this.lyricUrl,
     this.favorite = false,
+    this.source = MusicSourceLabel.huawei,
+    this.member = false,
   });
 
   final String id;
@@ -95,6 +110,10 @@ class Song {
   final Set<AudioQuality> qualities;
   final Uri? lyricUrl;
   bool favorite;
+  final MusicSourceLabel source;
+
+  /// 会员歌曲（沐语收藏页「会员」列的黄色钻石徽标）。
+  final bool member;
 
   String get artistText => artists.isEmpty ? '未知歌手' : artists.join(' / ');
 

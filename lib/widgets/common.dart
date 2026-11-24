@@ -118,21 +118,31 @@ class QualityBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = quality == AudioQuality.standard ? 'HQ' : quality.label;
+    // 沐语实测徽标：Hi-Res 金色描边 / SQ 粉色描边 / HQ 灰色描边。
+    final label = switch (quality) {
+      AudioQuality.standard => 'HQ',
+      AudioQuality.lossless => 'SQ',
+      AudioQuality.hiRes => 'Hi-Res',
+    };
+    final color = switch (quality) {
+      AudioQuality.standard => const Color(0xFF8A9099),
+      AudioQuality.lossless => const Color(0xFFE8406A),
+      AudioQuality.hiRes => MuyuColors.hiRes,
+    };
     return Container(
       padding: EdgeInsets.symmetric(
           horizontal: small ? 4 : 6, vertical: small ? 1 : 2),
       decoration: BoxDecoration(
-        color: MuyuColors.hiRes.withValues(alpha: 0.16),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: MuyuColors.hiRes.withValues(alpha: 0.55)),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
       ),
       child: Text(
         label,
         style: TextStyle(
           fontSize: small ? 9 : 10,
           fontWeight: FontWeight.w700,
-          color: MuyuColors.hiRes,
+          color: color,
         ),
       ),
     );
@@ -243,19 +253,37 @@ class SongRow extends StatelessWidget {
                   const SizedBox(height: 3),
                   GestureDetector(
                     onTap: onArtistTap,
-                    child: Text(song.artistText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: MuyuTheme.muted),
+                    child: Row(
+                      children: [
+                        Icon(song.source.icon,
+                            size: 11, color: song.source.color),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(song.artistText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: MuyuTheme.muted),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-            if (song.qualities.contains(AudioQuality.hiRes))
+            if (song.member)
               const Padding(
-                padding: EdgeInsets.only(right: 6),
-                child: QualityBadge(AudioQuality.hiRes, small: true),
+                padding: EdgeInsets.only(right: 4),
+                child: Icon(Icons.diamond, size: 13, color: Color(0xFFE0A020)),
               ),
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: QualityBadge(
+                song.qualities.isEmpty
+                    ? AudioQuality.standard
+                    : song.qualities.reduce((a, b) => a.index > b.index ? a : b),
+                small: true,
+              ),
+            ),
             TinyIconButton(
               icon: song.favorite ? Icons.favorite : Icons.favorite_border,
               color: song.favorite ? MuyuColors.primary : const Color(0xFF2AA560),
