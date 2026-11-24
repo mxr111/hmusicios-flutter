@@ -269,6 +269,12 @@ class HuaweiGateway {
         final code = firstString(Map<String, dynamic>.from(result), const ['resultCode']);
         final msg = firstString(Map<String, dynamic>.from(result), const ['resultMessage']) ?? '';
         if (code != null && code != HuaweiPaths.successCode) {
+          if (code == '142400') {
+            throw const HuaweiException('该歌曲当前不可播放（无版权 / 已下架 / 会员限制）');
+          }
+          if (code == '990000') {
+            throw const HuaweiException('华为鉴权失败，请重新登录华为账号');
+          }
           final lower = msg.toLowerCase();
           if (code == '401' ||
               lower.contains('token expired') ||

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/models.dart';
+import 'package:muyu_flutter/pages/secondary_pages.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/theme.dart';
@@ -132,6 +133,22 @@ void main() {
     expect(state.activePlaylist?.id, '24926');
     expect(state.activePlaylist?.kind, 'chart');
 
+    state.dispose();
+  });
+
+  testWidgets('设置页可打开且不会因布局卡死', (tester) async {
+    final state = AppState();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: SettingsPage(state: state, onLogin: () {}),
+    ));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('设置'), findsOneWidget);
+    expect(find.text('默认音质'), findsOneWidget);
+    expect(find.text('皮肤与外观'), findsOneWidget);
     state.dispose();
   });
 }

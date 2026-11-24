@@ -57,6 +57,7 @@ class AppState extends ChangeNotifier {
   int tab = 0;
   bool loading = false;
   String? error;
+  void Function(String message)? onError;
   bool showLyrics = false;
   bool showPlayer = false;
 
@@ -660,9 +661,43 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> play(Song song, {List<Song>? queue}) async {
-    await audio.playSong(song, list: queue);
-    if (audio.error != null) error = audio.error;
+    final list = (queue == null || queue.isEmpty)
+        ? <Song>[song]
+        : List<Song>.of(queue);
+    var start = list.indexWhere((s) => s.id == song.id);
+    if (start < 0) {
+      list.insert(0, song);
+      start = 0;
+    }
+    error = null;
+    final attempts = list.length < 5 ? list.length : 5;
+    String? lastError;
+    for (var i = 0; i < attempts; i++) {
+      final candidate = list[(start + i) % list.length];
+      await audio.playSong(candidate, list: list);
+      if (audio.error == null) {
+        error = null;
+        notifyListeners();
+        return;
+      }
+      lastError = audio.error;
+      // 只有“这首不可播/无版权”才继续试下一首；网络错误直接报错，
+      // 避免连续 5 次超时让界面像卡死。
+      if (!_looksUnplayable(lastError)) break;
+    }
+    error = lastError ?? '无法播放该歌曲';
+    onError?.call(error!);
     notifyListeners();
+  }
+
+  static bool _looksUnplayable(String? message) {
+    if (message == null || message.isEmpty) return false;
+    return message.contains('142400') ||
+        message.contains('没有可用') ||
+        message.contains('无版权') ||
+        message.contains('版权') ||
+        message.contains('not available') ||
+        message.contains('不可播放');
   }
 
   /// 供 UI 在修改局部状态后请求重建（避免外部直接调用受保护的 notifyListeners）
@@ -786,6 +821,7 @@ class AppState extends ChangeNotifier {
       await work();
     } catch (e) {
       error = e.toString();
+      onError?.call(error!);
     } finally {
       loading = false;
       notifyListeners();

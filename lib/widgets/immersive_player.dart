@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
@@ -37,13 +38,20 @@ class ImmersivePlayer extends StatelessWidget {
       body: Stack(
         children: [
           // 1. 封面模糊背景
-          Positioned.fill(child: _Backdrop(url: song?.cover, dark: pal.dark)),
+          Positioned.fill(child: _Backdrop(
+            url: song?.cover,
+            dark: state.showLyrics ? true : pal.dark,
+          )),
           // 2. 暗色蒙层（保证文字可读）
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: (pal.dark ? Colors.black : Colors.white)
-                    .withValues(alpha: pal.dark ? 0.45 : 0.30),
+                // 歌词模式必须压暗封面背景，否则浅色/高对比封面会把
+                // 白色几何歌词淹没。
+                color: state.showLyrics
+                    ? Colors.black.withValues(alpha: 0.72)
+                    : (pal.dark ? Colors.black : Colors.white)
+                        .withValues(alpha: pal.dark ? 0.45 : 0.30),
               ),
             ),
           ),
@@ -474,14 +482,20 @@ class _Backdrop extends StatelessWidget {
       ),
     );
     if (url == null) return fallback;
-    return Image.network(
-      url.toString(),
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: double.infinity,
-      errorBuilder: (_, _, _) => fallback,
-      loadingBuilder: (context, child, progress) =>
-          progress == null ? child : fallback,
+    return Transform.scale(
+      scale: 1.12,
+      child: ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+        child: Image.network(
+          url.toString(),
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (_, _, _) => fallback,
+          loadingBuilder: (context, child, progress) =>
+              progress == null ? child : fallback,
+        ),
+      ),
     );
   }
 }

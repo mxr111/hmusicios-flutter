@@ -511,11 +511,17 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        const Text('设置', style: MuyuTheme.title),
-        const SizedBox(height: 20),
+    return Scaffold(
+      backgroundColor: MuyuColors.background,
+      appBar: AppBar(
+        title: const Text('设置'),
+        backgroundColor: Colors.transparent,
+        foregroundColor: MuyuColors.ink,
+        elevation: 0,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        children: [
         _card(
           '默认音质',
           DropdownButton<AudioQuality>(
@@ -582,7 +588,8 @@ class SettingsPage extends StatelessWidget {
           '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
           style: MuyuTheme.muted,
         ),
-      ],
+        ],
+      ),
     );
   }
 

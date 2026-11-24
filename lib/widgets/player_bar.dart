@@ -15,10 +15,9 @@ class PlayerBar extends StatelessWidget {
 
   static final Song _placeholder = Song(
     id: 'placeholder',
-    name: '后来的我们',
-    artists: const ['五月天'],
-    durationMs: 285000,
-    qualities: const {AudioQuality.standard, AudioQuality.hiRes},
+    name: '未在播放',
+    artists: const ['点击播放推荐歌曲'],
+    qualities: const {AudioQuality.standard},
   );
 
   @override
@@ -28,15 +27,15 @@ class PlayerBar extends StatelessWidget {
     final hasTrack = audio.current != null;
     final total = hasTrack && audio.duration.inSeconds > 0
         ? audio.duration.inSeconds.toDouble()
-        : 285.0;
+        : 1.0;
     final currentSeconds = hasTrack
         ? audio.position.inSeconds.toDouble().clamp(0.0, total)
-        : 79.0;
+        : 0.0;
 
     return GestureDetector(
       // 原版交互：点播放条空白/封面/歌名进入全屏播放页；
       // 歌词按钮也进入同一页，而不是只切换一个独立歌词层。
-      onTap: hasTrack ? () => state.openFullPlayer(song) : null,
+      onTap: hasTrack ? () => state.openFullPlayer(song) : _startFirst,
       child: Container(
         height: MuyuDims.playerBarHeight,
         decoration: BoxDecoration(
@@ -114,7 +113,12 @@ class PlayerBar extends StatelessWidget {
                                   audio.seek(Duration(seconds: v.toInt())),
                             ),
                           ),
-                          Text(_fmt(total), style: MuyuTheme.muted),
+                          Text(
+                            hasTrack && audio.duration.inSeconds > 0
+                                ? _fmt(total)
+                                : '0:00',
+                            style: MuyuTheme.muted,
+                          ),
                         ],
                       );
                     },
@@ -124,7 +128,7 @@ class PlayerBar extends StatelessWidget {
                 if (!wide) ...[
                   TinyIconButton(
                     icon: audio.playing ? Icons.pause : Icons.play_arrow,
-                    onTap: audio.toggle,
+                    onTap: _togglePlayback,
                     size: 24,
                     color: MuyuColors.ink,
                   ),
@@ -157,7 +161,7 @@ class PlayerBar extends StatelessWidget {
         TinyIconButton(icon: Icons.skip_previous, onTap: audio.previous, size: 20),
         const SizedBox(width: 4),
         GestureDetector(
-          onTap: audio.toggle,
+          onTap: _togglePlayback,
           child: Container(
             width: 38,
             height: 38,
@@ -176,6 +180,22 @@ class PlayerBar extends StatelessWidget {
         TinyIconButton(icon: Icons.skip_next, onTap: audio.next, size: 20),
       ],
     );
+  }
+
+  void _startFirst() {
+    if (state.homeSongs.isNotEmpty) {
+      state.play(state.homeSongs.first, queue: state.homeSongs);
+    } else {
+      state.loadHome();
+    }
+  }
+
+  void _togglePlayback() {
+    if (state.audio.current == null) {
+      _startFirst();
+    } else {
+      state.audio.toggle();
+    }
   }
 
   List<Widget> _rightButtons(BuildContext context, Song song) {

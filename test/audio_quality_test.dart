@@ -38,6 +38,22 @@ class _PlaybackGateway extends HuaweiGateway {
   }
 }
 
+class _FullWithAuditionFieldsGateway extends HuaweiGateway {
+  @override
+  Future<Map<String, dynamic>> request(String path,
+      {Map<String, dynamic> body = const <String, dynamic>{}}) async {
+    final quality = '${body['qualityType']}';
+    return <String, dynamic>{
+      'result': <String, dynamic>{'resultCode': '000000'},
+      'auditionEnd': '90000',
+      'auditionTime': '30000',
+      'playFragmentFlag': '0',
+      'fragmentInfo': <String, dynamic>{'hasFragement': '0'},
+      'fileURL': 'https://test.dbankcdn.cn/full_$quality.mp3',
+    };
+  }
+}
+
 void main() {
   test('Hi-Res 试听片段会被跳过，回退到完整 Hi-Res 文件', () async {
     final api = HuaweiAPI(gateway: _PlaybackGateway());
@@ -73,5 +89,15 @@ void main() {
       ),
       throwsA(isA<HuaweiException>()),
     );
+  });
+
+  test('完整歌曲即使带 auditionEnd 字段也不能误判成试听', () async {
+    final api = HuaweiAPI(gateway: _FullWithAuditionFieldsGateway());
+    final files = await api.audioFiles(
+      'song-1',
+      upstreamQualities: const <AudioQuality>{AudioQuality.standard},
+    );
+    expect(files, isNotEmpty);
+    expect(files.first.url.toString(), contains('full_1.mp3'));
   });
 }

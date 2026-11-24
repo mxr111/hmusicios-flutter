@@ -489,18 +489,22 @@ class HuaweiAPI {
   /// 30/60 秒，`auditionEnd`/`auditionTime` 或 URL 的 `_AQ`/`_PV` 后缀可判定。
   /// 这类地址绝不能当成完整歌曲交给播放器。
   static bool _isAudition(Map<String, dynamic> json, Uri url) {
-    for (final key in const [
-      'auditionEnd',
-      'auditionTime',
-      'auditionBegin',
-    ]) {
-      if (json.containsKey(key)) return true;
-    }
     final path = url.path.toLowerCase();
-    return path.endsWith('_aq.mp3') ||
+    if (path.endsWith('_aq.mp3') ||
         path.endsWith('_pv.mp3') ||
         path.endsWith('_aq.flac') ||
-        path.endsWith('_pv.flac');
+        path.endsWith('_pv.flac')) {
+      return true;
+    }
+    final flag = json['playFragmentFlag'];
+    if (flag == '1' || flag == 1) return true;
+    final fragment = json['fragmentInfo'];
+    if (fragment is Map &&
+        '${fragment['hasFragement']}' == '1' &&
+        (json.containsKey('auditionEnd') || json.containsKey('auditionTime'))) {
+      return true;
+    }
+    return false;
   }
 
   /// 收藏增删（源码事实 API_CONTRACT §3.4）：create/delete 两个独立接口，

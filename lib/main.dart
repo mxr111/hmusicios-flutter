@@ -26,10 +26,22 @@ class MuyuApp extends StatefulWidget {
 
 class _MuyuAppState extends State<MuyuApp> {
   final AppState _state = AppState();
+  final GlobalKey<ScaffoldMessengerState> _messengerKey =
+      GlobalKey<ScaffoldMessengerState>();
 
   @override
   void initState() {
     super.initState();
+    _state.onError = (message) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _messengerKey.currentState?.showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      });
+    };
     _bootstrap();
   }
 
@@ -56,7 +68,8 @@ class _MuyuAppState extends State<MuyuApp> {
     return AnimatedBuilder(
       animation: _state,
       builder: (context, _) => MaterialApp(
-        title: '沐语',
+        title: 'Hmusic',
+        scaffoldMessengerKey: _messengerKey,
         debugShowCheckedModeBanner: false,
         theme: MuyuTheme.light(),
         darkTheme: MuyuTheme.dark(),
