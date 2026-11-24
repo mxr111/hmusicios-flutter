@@ -55,3 +55,7 @@ rea_evidence/_regions/
 rea_evidence/_recent_turns.md
 rea_evidence/_uncommitted.diff
 rea_evidence/_strip.py
+
+# 本地构建产物
+*.ipa
+muyu-ipa-artifact.zip
