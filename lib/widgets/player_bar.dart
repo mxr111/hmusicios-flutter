@@ -33,9 +33,13 @@ class PlayerBar extends StatelessWidget {
         ? audio.position.inSeconds.toDouble().clamp(0.0, total)
         : 79.0;
 
-    return Container(
-      height: MuyuDims.playerBarHeight,
-      decoration: BoxDecoration(
+    return GestureDetector(
+      // 原版交互：点播放条空白/封面/歌名进入全屏播放页；
+      // 歌词按钮也进入同一页，而不是只切换一个独立歌词层。
+      onTap: hasTrack ? () => state.openFullPlayer(song) : null,
+      child: Container(
+        height: MuyuDims.playerBarHeight,
+        decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(36),
         boxShadow: [
@@ -46,7 +50,7 @@ class PlayerBar extends StatelessWidget {
           ),
         ],
       ),
-      child: LayoutBuilder(
+        child: LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth > 820;
           return Padding(
@@ -134,6 +138,7 @@ class PlayerBar extends StatelessWidget {
             ),
           );
         },
+        ),
       ),
     );
   }

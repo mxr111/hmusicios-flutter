@@ -24,6 +24,7 @@ void main() {
     expect(home.newSongs, isNotEmpty);
     expect(home.playlists, isNotEmpty);
     expect(home.charts, isNotEmpty);
+    expect(home.newSongs.first.cover, isNotNull);
 
     final search = await api.searchAll('周杰伦');
     expect(search.songs, isNotEmpty);
@@ -48,5 +49,12 @@ void main() {
     final files = await api.audioFiles(favorites.first.id);
     expect(files, isNotEmpty);
     expect(files.first.url.toString(), contains('http'));
+
+    // Hi-Res 无权限时网关会给 30s 试听；必须回退到完整档位而不是试听。
+    final hiRes = await api.audioFiles(favorites.first.id,
+        upstreamQualities: const <AudioQuality>{AudioQuality.hiRes});
+    expect(hiRes, isNotEmpty);
+    expect(hiRes.first.url.path.toLowerCase(), isNot(contains('_aq')));
+    expect(hiRes.first.url.path.toLowerCase(), isNot(contains('_pv')));
   }, skip: token.isEmpty, timeout: const Timeout(Duration(minutes: 2)));
 }

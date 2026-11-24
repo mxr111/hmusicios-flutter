@@ -121,7 +121,7 @@ class AppShell extends StatelessWidget {
           bottom: 14,
           child: PlayerBar(state: state),
         ),
-        if (state.showLyrics)
+        if (state.showPlayer || state.showLyrics)
           Positioned.fill(child: LyricsPage(state: state)),
         if (state.activePlaylist != null)
           Positioned.fill(child: PlaylistDetailPage(state: state)),

@@ -11,7 +11,7 @@ import 'package:muyu_flutter/widgets/immersive_player.dart';
 import 'package:muyu_flutter/widgets/netease_home_page.dart';
 
 void main() {
-  testWidgets('发现页在空数据下可构建（推荐歌单/新歌/榜单/电台/收藏）', (tester) async {
+  testWidgets('音乐厅在空数据下可构建（推荐歌单/华为榜单）', (tester) async {
     final state = AppState();
     await tester.pumpWidget(MaterialApp(
       theme: MuyuTheme.light(),
@@ -20,11 +20,11 @@ void main() {
     await tester.pump();
 
     expect(find.text('音乐厅'), findsOneWidget);
-    expect(find.text('我的收藏'), findsWidgets); // 金刚区 + 收藏板块
-    // 下方区块在 ListView 里懒加载，滚动后再验证（字段名来自 REA 反编译）。
-    await tester.scrollUntilVisible(find.text('新歌速递'), 300, scrollable: find.byType(Scrollable).first);
+    expect(find.text('推荐歌单'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('华为音乐榜单'), 300,
+        scrollable: find.byType(Scrollable).first);
     await tester.pump();
-    expect(find.text('新歌速递'), findsOneWidget);
+    expect(find.text('华为音乐榜单'), findsOneWidget);
     state.dispose();
   });
 

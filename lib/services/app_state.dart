@@ -58,6 +58,7 @@ class AppState extends ChangeNotifier {
   bool loading = false;
   String? error;
   bool showLyrics = false;
+  bool showPlayer = false;
 
   /// 12 款主题索引（源码事实 tinglan/theme.go），默认晨光。
   int themeIndex = 0;
@@ -624,8 +625,27 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> showLyricsFor(Song song) async {
+    showPlayer = true;
     showLyrics = true;
     notifyListeners();
+    await _loadLyrics(song);
+  }
+
+  /// 点播放条进入全屏播放器（默认封面/唱片区），不切到歌词焦点。
+  Future<void> openFullPlayer(Song song) async {
+    showPlayer = true;
+    showLyrics = false;
+    notifyListeners();
+    await _loadLyrics(song);
+  }
+
+  void closeFullPlayer() {
+    showPlayer = false;
+    showLyrics = false;
+    notifyListeners();
+  }
+
+  Future<void> _loadLyrics(Song song) async {
     try {
       lyrics = switch (source) {
         MusicSource.netease => await netease.lyrics(song.id),
@@ -651,6 +671,7 @@ class AppState extends ChangeNotifier {
   void selectTab(int i) {
     tab = i;
     showLyrics = false;
+    showPlayer = false;
     notifyListeners();
     if (i == 0 && !discoverLoaded) loadHome();
     if (i == 3 && favorites.isEmpty && playlists.isEmpty) loadLibrary();

@@ -1,0 +1,77 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:muyu_flutter/models.dart';
+import 'package:muyu_flutter/protocol/endpoints.dart';
+import 'package:muyu_flutter/protocol/huawei_api.dart';
+import 'package:muyu_flutter/protocol/huawei_gateway.dart';
+
+class _PlaybackGateway extends HuaweiGateway {
+  _PlaybackGateway({this.allAudition = false});
+
+  final bool allAudition;
+
+  @override
+  Future<Map<String, dynamic>> request(String path,
+      {Map<String, dynamic> body = const <String, dynamic>{}}) async {
+    if (path != HuaweiPaths.playUrl) {
+      throw StateError('unexpected path $path');
+    }
+    final quality = '${body['qualityType']}';
+    if (allAudition || quality == '7') {
+      return <String, dynamic>{
+        'result': <String, dynamic>{'resultCode': '000000'},
+        'auditionEnd': '60000',
+        'auditionTime': '60000',
+        'fileURL': 'https://test.dbankcdn.cn/preview_$quality.mp3_AQ.mp3',
+      };
+    }
+    final suffix = switch (quality) {
+      '5' => 'HIRES.flac',
+      '3' => 'SQ.flac',
+      '2' => 'HQ.mp3',
+      _ => 'MQ.mp3',
+    };
+    return <String, dynamic>{
+      'result': <String, dynamic>{'resultCode': '000000'},
+      'playQuality': quality,
+      'fileURL': 'https://test.dbankcdn.cn/full_$suffix',
+    };
+  }
+}
+
+void main() {
+  test('Hi-Res 试听片段会被跳过，回退到完整 Hi-Res 文件', () async {
+    final api = HuaweiAPI(gateway: _PlaybackGateway());
+    final files = await api.audioFiles(
+      'song-1',
+      upstreamQualities: const <AudioQuality>{AudioQuality.hiRes},
+    );
+
+    expect(files, hasLength(1));
+    expect(files.single.quality, AudioQuality.hiRes);
+    expect(files.single.url.toString(), contains('HIRES.flac'));
+    expect(files.single.url.toString(), isNot(contains('_AQ')));
+  });
+
+  test('标准档请求返回完整文件', () async {
+    final api = HuaweiAPI(gateway: _PlaybackGateway());
+    final files = await api.audioFiles(
+      'song-1',
+      upstreamQualities: const <AudioQuality>{AudioQuality.standard},
+    );
+
+    expect(files.single.quality, AudioQuality.standard);
+    expect(files.single.url.toString(), contains('MQ.mp3'));
+  });
+
+  test('全部档位都只有试听时明确报错，不把 30 秒片段当完整歌曲', () async {
+    final api = HuaweiAPI(gateway: _PlaybackGateway(allAudition: true));
+
+    expect(
+      () => api.audioFiles(
+        'song-1',
+        upstreamQualities: const <AudioQuality>{AudioQuality.standard},
+      ),
+      throwsA(isA<HuaweiException>()),
+    );
+  });
+}

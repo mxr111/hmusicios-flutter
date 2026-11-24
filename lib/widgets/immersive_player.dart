@@ -79,10 +79,44 @@ class ImmersivePlayer extends StatelessWidget {
 
   /// 舞台：按播放器样式分派（REA 4 种样式）。
   Widget _stage(BuildContext context, Song? song, MuyuPalette pal, Size size, bool wide) {
+    // 从播放条进入时先展示「封面 + 歌词」的播放页；点歌词按钮才进入
+    // 以歌词为主的 sonnet 视图。两种视图都保留封面。
+    if (!state.showLyrics) {
+      return wide
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(width: size.width * 0.06),
+                SizedBox(
+                  width: math.min(size.width * 0.34, 420),
+                  child: _CoverSide(
+                      song: song, pal: pal, spinning: state.audio.playing),
+                ),
+                const SizedBox(width: 48),
+                Expanded(child: _LyricSide(state: state, pal: pal)),
+                SizedBox(width: size.width * 0.05),
+              ],
+            )
+          : _NarrowLyrics(state: state, song: song, pal: pal);
+    }
     switch (state.playerStyle) {
       case PlayerStyle.modern:
-        // 新版：沐语标志性 sonnet 几何艺术字歌词铺满屏幕。
-        return SonnetLyrics(state: state, pal: pal);
+        // 新版：沐语标志性 sonnet 几何艺术字歌词铺满屏幕 + 小尺寸黑胶封面。
+        return Stack(
+          children: [
+            SonnetLyrics(state: state, pal: pal),
+            if (song != null)
+              Positioned(
+                left: 18,
+                top: 8,
+                child: VinylCover(
+                  url: song.cover,
+                  size: 86,
+                  spinning: state.audio.playing,
+                ),
+              ),
+          ],
+        );
       case PlayerStyle.cover:
         // 封面沉浸：大图铺底 + 歌词悬浮。
         return Stack(
@@ -127,10 +161,7 @@ class ImmersivePlayer extends StatelessWidget {
         children: [
           IconButton(
             icon: Icon(Icons.keyboard_arrow_down, color: pal.text, size: 30),
-            onPressed: () {
-              state.showLyrics = false;
-              state.refresh();
-            },
+            onPressed: state.closeFullPlayer,
           ),
           Expanded(
             child: Column(
@@ -145,6 +176,17 @@ class ImmersivePlayer extends StatelessWidget {
                       style: TextStyle(fontSize: 11, color: pal.muted)),
               ],
             ),
+          ),
+          IconButton(
+            icon: Icon(
+              state.showLyrics ? Icons.album_outlined : Icons.lyrics_outlined,
+              color: pal.text,
+            ),
+            onPressed: () {
+              state.showLyrics = !state.showLyrics;
+              state.refresh();
+            },
+            tooltip: state.showLyrics ? '封面播放页' : '歌词页',
           ),
           IconButton(
             icon: Icon(Icons.style_outlined, color: pal.text),

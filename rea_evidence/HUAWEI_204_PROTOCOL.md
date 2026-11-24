@@ -91,6 +91,11 @@ Accept-Encoding: gzip
 - 旧代码只接受 **https**，而部分 CDN 历史响应是 `http://music-pics...`；
   现已同时接受 http/https。
 - 取流请求按目标档位尝试：Hi-Res `7→5→3`，无损 `3→2`，标准 `1→2`。
+- **试听片段实测**：无 Hi-Res 权限时 `qualityType=7` 仍返回 200，但
+  `fileURL` 是 `..._AQ.mp3`，大小约 465 KB（约 30 秒），并带
+  `auditionEnd/auditionTime`。同一首歌 `1/2/3/5` 分别是 4.3/10.8/23/51 MB
+  的完整文件。客户端必须跳过 `_AQ`/`_PV`/带 audition 字段的响应，否则
+  播放器时长会显示 30 秒或 1 分钟。
 
 ## 6. 仍未解出的部分
 

@@ -112,6 +112,20 @@ void main() {
     expect(s.cover.toString(), contains('dbankcdn.cn'));
   });
 
+  test('parseSong 读取 picture 子对象封面（播放条/歌词页封面）', () {
+    final s = HuaweiAPI.parseSong(<String, dynamic>{
+      'contentID': 'song-cover',
+      'contentName': '有封面的歌',
+      'picture': <String, dynamic>{
+        'bigImgURL': 'https://contentcenter-drcn.dbankcdn.cn/img/big.jpg',
+        'middleImgURL': 'https://contentcenter-drcn.dbankcdn.cn/img/mid.jpg',
+        'smallImgURL': 'https://contentcenter-drcn.dbankcdn.cn/img/small.jpg',
+      },
+    });
+    expect(s.cover, isNotNull);
+    expect(s.cover.toString(), contains('big.jpg'));
+  });
+
   test('空 DiscoverData 表示接口没有返回，不含占位内容', () {
     const d = DiscoverData();
     expect(d.banners, isEmpty);

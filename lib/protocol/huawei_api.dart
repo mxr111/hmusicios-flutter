@@ -257,9 +257,6 @@ class HuaweiAPI {
   static List<Playlist> _parsePlaylists(Map<String, dynamic> json) {
     return deepList(json, const ['favoriteInfos']).map((d) {
       final kindCode = HuaweiGateway.firstInt(d, const ['contentType']) ?? 0;
-      final picture = d['picture'] is Map
-          ? Map<String, dynamic>.from(d['picture'] as Map)
-          : <String, dynamic>{};
       return Playlist(
         id: HuaweiGateway.firstString(d,
                 const ['contentID', 'playListID', 'id']) ??
@@ -267,8 +264,7 @@ class HuaweiAPI {
         name: HuaweiGateway.firstString(d,
                 const ['contentName', 'playListName', 'name']) ??
             '',
-        cover: HuaweiGateway.firstUrl(
-            picture, const ['bigImgURL', 'middleImgURL', 'smallImgURL']),
+        cover: coverOf(d),
         songCount: HuaweiGateway.firstInt(d,
                 const ['totalCount', 'songNum', 'number']) ??
             0,
@@ -449,7 +445,9 @@ class HuaweiAPI {
             });
         final candidate = HuaweiGateway.firstUrl(
             result, const ['fileURL', 'fileUrl', 'playURL', 'url']);
-        if (candidate != null && _safeAudioUrl(candidate)) {
+        if (candidate != null &&
+            _safeAudioUrl(candidate) &&
+            !_isAudition(result, candidate)) {
           json = result;
           link = candidate;
           requestedCode = typeCode;
@@ -490,6 +488,24 @@ class HuaweiAPI {
     final host = u.host.toLowerCase();
     return const ['.dbankcdn.cn', '.tingmall.com', '.kuke.com']
         .any((s) => host.endsWith(s) && host.length > s.length);
+  }
+
+  /// 试听片段识别：Hi-Res 无权限时网关仍返回 200 + fileURL，但只有
+  /// 30/60 秒，`auditionEnd`/`auditionTime` 或 URL 的 `_AQ`/`_PV` 后缀可判定。
+  /// 这类地址绝不能当成完整歌曲交给播放器。
+  static bool _isAudition(Map<String, dynamic> json, Uri url) {
+    for (final key in const [
+      'auditionEnd',
+      'auditionTime',
+      'auditionBegin',
+    ]) {
+      if (json.containsKey(key)) return true;
+    }
+    final path = url.path.toLowerCase();
+    return path.endsWith('_aq.mp3') ||
+        path.endsWith('_pv.mp3') ||
+        path.endsWith('_aq.flac') ||
+        path.endsWith('_pv.flac');
   }
 
   /// 收藏增删（源码事实 API_CONTRACT §3.4）：create/delete 两个独立接口，
@@ -594,8 +610,7 @@ class HuaweiAPI {
       name: HuaweiGateway.firstString(
               d, const ['artistName', 'name', 'artNM']) ??
           '未知歌手',
-      cover: HuaweiGateway.firstUrl(
-          d, const ['artistPicUrl', 'middleImgURL', 'bigImgURL', 'picture', 'pic']),
+      cover: coverOf(d, const <String>['artistPicUrl']),
       desc: HuaweiGateway.firstString(
               d, const ['artistDesc', 'description', 'intro']) ??
           '',
@@ -711,6 +726,40 @@ class HuaweiAPI {
     return out;
   }
 
+  /// 华为封面在 `picture:{bigImgURL,middleImgURL,smallImgURL}` 子对象里；
+  /// 直接对顶层取 `picture` 会拿到 Map 而丢封面（播放条/歌词页空白）。
+  static Uri? coverOf(Map<String, dynamic> d,
+      [List<String> extraKeys = const <String>[]]) {
+    final picture = d['picture'];
+    if (picture is Map) {
+      final nested = HuaweiGateway.firstUrl(
+        Map<String, dynamic>.from(picture),
+        const <String>[
+          'bigImgURL',
+          'middleImgURL',
+          'smallImgURL',
+          'pic',
+          'url',
+          'coverUrl',
+        ],
+      );
+      if (nested != null) return nested;
+    }
+    return HuaweiGateway.firstUrl(d, <String>[
+      ...extraKeys,
+      'middleImgURL',
+      'bigImgURL',
+      'smallImgURL',
+      'mImg',
+      'bImg',
+      'sImg',
+      'pic',
+      'picture',
+      'coverUrl',
+      'cover',
+    ]);
+  }
+
   static Song parseSong(Map<String, dynamic> d,
       {MusicSourceLabel source = MusicSourceLabel.huawei}) {
     final artists = <String>[];
@@ -762,10 +811,7 @@ class HuaweiAPI {
           '',
       artists: artists,
       artistIds: artistIds,
-      cover: HuaweiGateway.firstUrl(d, const [
-        'middleImgURL', 'bigImgURL', 'smallImgURL', 'mImg', 'bImg', 'sImg',
-        'pic', 'picture', 'coverUrl', 'cover'
-      ]),
+      cover: coverOf(d),
       // durationSeconds 以秒计（REA 实测字段），其余为毫秒。
       durationMs: HuaweiGateway.firstInt(d, const ['durationSeconds']) != null
           ? HuaweiGateway.firstInt(d, const ['durationSeconds'])! * 1000
@@ -1137,8 +1183,7 @@ class HuaweiAPI {
   }
 
   static DiscoverBanner? _bannerFrom(Map<String, dynamic> d) {
-    final url = HuaweiGateway.firstUrl(
-        d, const ['picture', 'bigImgURL', 'middleImgURL', 'imageUrl']);
+    final url = coverOf(d, const <String>['imageUrl']);
     final title = HuaweiGateway.firstString(
         d, const ['contentName', 'title', 'name', 'subTitle']);
     if (url == null || title == null || title.isEmpty || !_bannerImageAllowed(url)) {
@@ -1162,9 +1207,7 @@ class HuaweiAPI {
       name: HuaweiGateway.firstString(d, const [
             'chartName', 'playListName', 'contentName', 'name', 'title'
           ]) ?? '',
-      cover: HuaweiGateway.firstUrl(d, const [
-        'picture', 'middleImgURL', 'bigImgURL', 'cover', 'coverUrl'
-      ]),
+      cover: coverOf(d),
       songCount: HuaweiGateway.firstInt(d,
               const ['songNum', 'totalCount', 'songCount', 'number']) ??
           0,
@@ -1182,10 +1225,7 @@ class HuaweiAPI {
             'artistName', 'contentName', 'name', 'artNM', 'NM', 'title'
           ]) ??
           '',
-      cover: HuaweiGateway.firstUrl(d, const [
-        'picture', 'bigImgURL', 'middleImgURL', 'smallImgURL',
-        'avatar', 'headPictureURL', 'cover'
-      ]),
+      cover: coverOf(d, const <String>['avatar', 'headPictureURL']),
       desc: HuaweiGateway.firstString(
               d, const ['description', 'artistDesc', 'summary', 'subTitle']) ??
           '',
@@ -1203,10 +1243,7 @@ class HuaweiAPI {
             'albumName', 'contentName', 'name', 'albNM', 'title'
           ]) ??
           '',
-      cover: HuaweiGateway.firstUrl(d, const [
-        'picture', 'bigImgURL', 'middleImgURL', 'smallImgURL',
-        'cover', 'coverUrl'
-      ]),
+      cover: coverOf(d),
       songCount: HuaweiGateway.firstInt(d,
               const ['songNum', 'totalCount', 'songCount', 'number']) ??
           0,

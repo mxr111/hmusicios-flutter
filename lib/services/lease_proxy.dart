@@ -81,10 +81,22 @@ class LeaseProxy {
       response.statusCode = upstreamResponse.statusCode;
       response.headers.set('Accept-Ranges', 'bytes');
       response.headers.set('Cache-Control', 'no-store');
+      var hasContentType = false;
       upstreamResponse.headers.forEach((name, values) {
         final lower = name.toLowerCase();
+        if (lower == 'content-type') {
+          final value = values.join(', ').toLowerCase();
+          // 华为 CDN 实测会返回 application/x-zerosize；AVPlayer 可能
+          // 因此无法正确探测时长。按扩展名给出标准 MIME。
+          if (value.isNotEmpty &&
+              !value.contains('zerosize') &&
+              !value.contains('octet-stream')) {
+            response.headers.set(name, values.join(', '));
+            hasContentType = true;
+          }
+          return;
+        }
         if (const <String>[
-          'content-type',
           'content-range',
           'content-length',
           'etag',
@@ -93,6 +105,10 @@ class LeaseProxy {
           response.headers.set(name, values.join(', '));
         }
       });
+      if (!hasContentType) {
+        final type = _audioContentType(remote);
+        if (type != null) response.headers.set('Content-Type', type);
+      }
 
       if (request.method == 'HEAD') {
         await response.close();
@@ -113,5 +129,16 @@ class LeaseProxy {
     } finally {
       client.close();
     }
+  }
+
+  static String? _audioContentType(Uri url) {
+    final path = url.path.toLowerCase();
+    if (path.endsWith('.mp3')) return 'audio/mpeg';
+    if (path.endsWith('.flac')) return 'audio/flac';
+    if (path.endsWith('.m4a') || path.endsWith('.mp4')) return 'audio/mp4';
+    if (path.endsWith('.aac')) return 'audio/aac';
+    if (path.endsWith('.wav')) return 'audio/wav';
+    if (path.endsWith('.ogg') || path.endsWith('.oga')) return 'audio/ogg';
+    return null;
   }
 }
