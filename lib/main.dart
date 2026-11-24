@@ -125,7 +125,11 @@ class AppShell extends StatelessWidget {
       case 3:
         return ShelfPage(state: state);
       case 4:
-        return MinePage(state: state, onLogin: () => _login(context));
+        return MinePage(
+          state: state,
+          onLogin: () => _login(context),
+          onSettings: () => _openSettings(context),
+        );
       default:
         return HomePage(state: state);
     }

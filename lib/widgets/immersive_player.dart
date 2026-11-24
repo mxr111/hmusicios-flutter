@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../models_skin.dart';
 import '../services/app_state.dart';
 import '../services/audio_controller.dart';
 import '../theme.dart';
@@ -47,25 +48,25 @@ class ImmersivePlayer extends StatelessWidget {
               SafeArea(
                 child: Column(
                   children: [
-                    _topBar(context, song, pal),
+                    if (!state.immersiveFullscreen) _topBar(context, song, pal),
                     Expanded(
-                      child: wide
-                          ? Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                SizedBox(width: size.width * 0.06),
-                                SizedBox(
-                                  width: math.min(size.width * 0.34, 420),
-                                  child: _CoverSide(song: song, pal: pal, spinning: state.audio.playing),
-                                ),
-                                const SizedBox(width: 48),
-                                Expanded(child: _LyricSide(state: state, pal: pal)),
-                                SizedBox(width: size.width * 0.05),
-                              ],
-                            )
-                          : _NarrowLyrics(state: state, song: song, pal: pal),
+                      child: _stage(context, song, pal, size, wide),
                     ),
-                    _BottomControls(state: state, pal: pal),
+                    if (!state.immersiveFullscreen)
+                      _BottomControls(state: state, pal: pal),
+                    // 沉浸模式下仍保留一个轻量的退出入口
+                    if (state.immersiveFullscreen)
+                      Align(
+                        alignment: Alignment.topRight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 8, right: 12),
+                          child: IconButton(
+                            icon: const Icon(Icons.fullscreen_exit, color: Colors.white70),
+                            onPressed: state.toggleImmersiveFullscreen,
+                            tooltip: '退出全屏沉浸',
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -74,6 +75,49 @@ class ImmersivePlayer extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// 舞台：按播放器样式分派（REA 4 种样式）。
+  Widget _stage(BuildContext context, Song? song, MuyuPalette pal, Size size, bool wide) {
+    switch (state.playerStyle) {
+      case PlayerStyle.modern:
+        // 新版：沐语标志性 sonnet 几何艺术字歌词铺满屏幕。
+        return SonnetLyrics(state: state, pal: pal);
+      case PlayerStyle.cover:
+        // 封面沉浸：大图铺底 + 歌词悬浮。
+        return Stack(
+          children: [
+            if (song?.cover != null)
+              Positioned.fill(child: _Backdrop(url: song!.cover, dark: true)),
+            _LyricSide(state: state, pal: pal),
+          ],
+        );
+      case PlayerStyle.classic:
+        // 经典：左封面右歌词（窄屏上下）。
+        return wide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(width: size.width * 0.06),
+                  SizedBox(
+                    width: math.min(size.width * 0.34, 420),
+                    child: _CoverSide(song: song, pal: pal, spinning: state.audio.playing),
+                  ),
+                  const SizedBox(width: 48),
+                  Expanded(child: _LyricSide(state: state, pal: pal)),
+                  SizedBox(width: size.width * 0.05),
+                ],
+              )
+            : _NarrowLyrics(state: state, song: song, pal: pal);
+      case PlayerStyle.minimal:
+        // 简洁：只有居中歌词，无封面。
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _LyricSide(state: state, pal: pal),
+          ),
+        );
+    }
   }
 
   Widget _topBar(BuildContext context, Song? song, MuyuPalette pal) {
@@ -103,11 +147,166 @@ class ImmersivePlayer extends StatelessWidget {
             ),
           ),
           IconButton(
+            icon: Icon(Icons.style_outlined, color: pal.text),
+            onPressed: () => _showPlayerStylePanel(context, pal),
+            tooltip: '播放器样式',
+          ),
+          IconButton(
+            icon: Icon(state.immersiveFullscreen
+                ? Icons.fullscreen_exit
+                : Icons.fullscreen, color: pal.text),
+            onPressed: () => state.toggleImmersiveFullscreen(),
+            tooltip: '全屏沉浸',
+          ),
+          IconButton(
+            icon: Icon(Icons.text_snippet_outlined, color: pal.text),
+            onPressed: () => _showLyricStylePanel(context, pal),
+            tooltip: '歌词样式',
+          ),
+          IconButton(
             icon: Icon(Icons.more_horiz, color: pal.text),
             onPressed: () => _showQualityMenu(context, pal),
             tooltip: '音质与音效',
           ),
         ],
+      ),
+    );
+  }
+
+  void _showPlayerStylePanel(BuildContext context, MuyuPalette pal) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: pal.surface,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('播放器样式',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+            ),
+            ...PlayerStyle.values.map((s) => ListTile(
+                  leading: Icon(
+                    state.playerStyle == s ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    color: pal.accent,
+                  ),
+                  title: Text(s.label, style: TextStyle(color: pal.text)),
+                  subtitle: Text(s.desc,
+                      style: TextStyle(color: pal.muted, fontSize: 11)),
+                  onTap: () {
+                    state.setPlayerStyle(s);
+                    Navigator.pop(context);
+                  },
+                )),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLyricStylePanel(BuildContext context, MuyuPalette pal) {
+    final st = state.lyricStyle;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: pal.surface,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.only(bottom: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('歌词样式',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.format_align_center, color: pal.accent),
+                title: Text('歌词居中', style: TextStyle(color: pal.text)),
+                trailing: Switch(
+                  value: st.align == LyricAlign.center,
+                  onChanged: (v) => state.updateLyricStyle(
+                      st.copyWith(align: v ? LyricAlign.center : LyricAlign.left)),
+                ),
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.format_bold, color: pal.accent),
+                title: Text('歌词粗体', style: TextStyle(color: pal.text)),
+                trailing: Switch(
+                  value: st.bold,
+                  onChanged: (v) => state.updateLyricStyle(st.copyWith(bold: v)),
+                ),
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.view_column, color: pal.accent),
+                title: Text('歌词列数', style: TextStyle(color: pal.text)),
+                trailing: DropdownButton<int>(
+                  value: st.columns,
+                  underline: const SizedBox.shrink(),
+                  items: <int>[1, 2, 3]
+                      .map((c) => DropdownMenuItem<int>(value: c, child: Text('$c 列')))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) state.updateLyricStyle(st.copyWith(columns: v));
+                  },
+                ),
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.text_fields, color: pal.accent),
+                title: Text('歌词字体', style: TextStyle(color: pal.text)),
+                trailing: DropdownButton<String>(
+                  value: st.font,
+                  underline: const SizedBox.shrink(),
+                  items: kBuiltinFonts
+                      .map((f) => DropdownMenuItem<String>(value: f, child: Text(f)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) state.updateLyricStyle(st.copyWith(font: v));
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.font_download, color: pal.accent, size: 18),
+                    const SizedBox(width: 12),
+                    Text('字号', style: TextStyle(color: pal.text)),
+                    Expanded(
+                      child: Slider(
+                        value: st.fontScale,
+                        min: 0.7,
+                        max: 1.8,
+                        divisions: 11,
+                        onChanged: (v) => state.updateLyricStyle(
+                            st.copyWith(fontScale: v)),
+                      ),
+                    ),
+                    Text('${(st.fontScale * 100).round()}%',
+                        style: TextStyle(color: pal.muted, fontSize: 11)),
+                  ],
+                ),
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.palette_outlined, color: pal.accent),
+                title: Text('颜色随封面主色变化', style: TextStyle(color: pal.text)),
+                trailing: Switch(
+                  value: st.followCoverColor,
+                  onChanged: (v) =>
+                      state.updateLyricStyle(st.copyWith(followCoverColor: v)),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -594,4 +793,226 @@ class _BottomControls extends StatelessWidget {
     final s = seconds.toInt();
     return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
   }
+}
+
+/// 沐语标志性「sonnet 几何艺术字歌词」（REA：native_sonnet_text_geometry.go /
+/// native_sonnet_outline.go / native_sonnet_glow.go / sonnetgpu.OriginalStrokes）。
+/// 截图事实：超大白色实心字（当前句）+ 白色描边空心字（相邻句）交叠铺满屏幕，
+/// 背景深色模糊封面 + 光晕 + 几何线框（十字/菱形/圆弧/虚线对齐框）。
+class SonnetLyrics extends StatelessWidget {
+  const SonnetLyrics({super.key, required this.state, required this.pal});
+  final AppState state;
+  final MuyuPalette pal;
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = state.lyrics;
+    final pos = state.audio.position;
+    var active = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].time <= pos) active = i;
+    }
+    final st = state.lyricStyle;
+    final glow = st.followCoverColor ? state.glowColor : pal.accent;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 1. 几何装饰线框（sonnet geometry）
+        CustomPaint(painter: _SonnetGeometryPainter(glow: glow)),
+        // 2. 光晕
+        Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [
+                glow.withValues(alpha: 0.22),
+                Colors.transparent,
+              ]),
+            ),
+          ),
+        ),
+        // 3. 艺术字歌词层
+        if (lines.isEmpty)
+          Center(
+            child: Text('暂无歌词',
+                style: TextStyle(color: pal.text.withValues(alpha: 0.5), fontSize: 16)),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final h = constraints.maxHeight;
+              return SizedBox(
+                width: w,
+                height: h,
+                child: Stack(
+                  alignment: st.align == LyricAlign.center
+                      ? Alignment.center
+                      : Alignment.centerLeft,
+                  children: [
+                    // 前一句（描边空心，偏上偏左）
+                    if (active - 1 >= 0)
+                      Positioned(
+                        top: h * 0.20,
+                        left: st.align == LyricAlign.center ? w * 0.22 : w * 0.10,
+                        child: _outlined(
+                          lines[active - 1].text,
+                          (h * 0.11 * st.fontScale).clamp(48.0, 150.0),
+                          Colors.white,
+                        ),
+                      ),
+                    // 当前句（实心大白字，中央）
+                    Positioned(
+                      top: h * 0.36,
+                      left: st.align == LyricAlign.center ? w * 0.10 : w * 0.06,
+                      right: st.align == LyricAlign.center ? w * 0.10 : 0,
+                      child: _filled(
+                        lines[active].text,
+                        (h * 0.15 * st.fontScale).clamp(64.0, 200.0),
+                        st.bold,
+                      ),
+                    ),
+                    // 后一句（描边空心，偏下偏右）
+                    if (active + 1 < lines.length)
+                      Positioned(
+                        top: h * 0.60,
+                        left: st.align == LyricAlign.center ? w * 0.26 : w * 0.18,
+                        child: _outlined(
+                          lines[active + 1].text,
+                          (h * 0.10 * st.fontScale).clamp(44.0, 130.0),
+                          Colors.white,
+                        ),
+                      ),
+                    // 译文/副标题
+                    if (active >= 0 && lines[active].subtitles.isNotEmpty)
+                      Positioned(
+                        top: h * 0.53,
+                        left: st.align == LyricAlign.center ? w * 0.12 : w * 0.08,
+                        child: Text(
+                          lines[active].subtitles.join(' · '),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _filled(String text, double size, bool bold) {
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.clip,
+      style: TextStyle(
+        fontSize: size,
+        fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
+        color: Colors.white,
+        height: 1.1,
+        shadows: [
+          Shadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _outlined(String text, double size, Color color) {
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.clip,
+      style: TextStyle(
+        fontSize: size,
+        fontWeight: FontWeight.w900,
+        color: Colors.transparent,
+        height: 1.1,
+        shadows: [
+          Shadow(color: color.withValues(alpha: 0.85), blurRadius: 1),
+        ],
+      ),
+    );
+  }
+}
+
+/// 几何线框：十字 / 菱形 / 圆弧 / 虚线对齐框（对应 native_sonnet_geometry.go）。
+class _SonnetGeometryPainter extends CustomPainter {
+  const _SonnetGeometryPainter({required this.glow});
+  final Color glow;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final line = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    final dim = Paint()
+      ..color = Colors.white.withValues(alpha: 0.10)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    // 十字线（左上 + 中上）
+    _cross(canvas, line, size.width * 0.28, size.height * 0.14, 34);
+    _cross(canvas, line, size.width * 0.52, size.height * 0.09, 26);
+    // 菱形（右上）
+    final d = size.width * 0.07;
+    final cx = size.width * 0.74;
+    final cy = size.height * 0.30;
+    canvas.drawPath(
+      Path()
+        ..moveTo(cx, cy - d)
+        ..lineTo(cx + d, cy)
+        ..lineTo(cx, cy + d)
+        ..lineTo(cx - d, cy)
+        ..close(),
+      line,
+    );
+    // 圆弧（左下）
+    canvas.drawArc(
+      Rect.fromCenter(
+          center: Offset(size.width * 0.14, size.height * 0.66),
+          width: 180,
+          height: 180),
+      0,
+      math.pi * 1.4,
+      false,
+      dim,
+    );
+    // 虚线对齐框（中部）
+    final dash = Paint()
+      ..color = Colors.white.withValues(alpha: 0.14)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    _dashedRect(canvas, dash, Rect.fromLTWH(
+      size.width * 0.18, size.height * 0.42, size.width * 0.5, size.height * 0.3));
+  }
+
+  void _cross(Canvas c, Paint p, double x, double y, double r) {
+    c.drawLine(Offset(x - r, y), Offset(x + r, y), p);
+    c.drawLine(Offset(x, y - r), Offset(x, y + r), p);
+  }
+
+  void _dashedRect(Canvas c, Paint p, Rect r) {
+    const dash = 6.0;
+    for (var x = r.left; x < r.right; x += dash * 2) {
+      c.drawLine(Offset(x, r.top), Offset(math.min(x + dash, r.right), r.top), p);
+      c.drawLine(Offset(x, r.bottom), Offset(math.min(x + dash, r.right), r.bottom), p);
+    }
+    for (var y = r.top; y < r.bottom; y += dash * 2) {
+      c.drawLine(Offset(r.left, y), Offset(r.left, math.min(y + dash, r.bottom)), p);
+      c.drawLine(Offset(r.right, y), Offset(r.right, math.min(y + dash, r.bottom)), p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SonnetGeometryPainter old) => old.glow != glow;
 }

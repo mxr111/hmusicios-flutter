@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Color;
 
 import '../models.dart';
+import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
 import '../theme.dart';
 import 'audio_controller.dart';
@@ -24,6 +26,46 @@ class AppState extends ChangeNotifier {
   MuyuPalette get palette => kMuyuPalettes[themeIndex.clamp(0, kMuyuPalettes.length - 1)];
   bool get darkMode => palette.dark; // 兼容旧 ThemeMode 逻辑
   int homePage = 1;
+
+  /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
+  PlayerStyle playerStyle = PlayerStyle.modern;
+  LyricStyle lyricStyle = const LyricStyle();
+  bool immersiveFullscreen = false;
+  ImmersiveGlass glass = ImmersiveGlass.normal;
+  Color glowColor = kGlowColors.first;
+  bool glassPress = true;
+  bool glassSlide = true;
+
+  void setPlayerStyle(PlayerStyle style) {
+    playerStyle = style;
+    notifyListeners();
+  }
+
+  void updateLyricStyle(LyricStyle style) {
+    lyricStyle = style;
+    notifyListeners();
+  }
+
+  void toggleImmersiveFullscreen() {
+    immersiveFullscreen = !immersiveFullscreen;
+    notifyListeners();
+  }
+
+  void setGlass(ImmersiveGlass value) {
+    glass = value;
+    notifyListeners();
+  }
+
+  void setGlowColor(Color color) {
+    glowColor = color;
+    notifyListeners();
+  }
+
+  void updateSkin({bool? glassPress, bool? glassSlide}) {
+    if (glassPress != null) this.glassPress = glassPress;
+    if (glassSlide != null) this.glassSlide = glassSlide;
+    notifyListeners();
+  }
 
   List<Song> homeSongs = <Song>[];
   List<Song> searchResults = <Song>[];

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../models_skin.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -211,10 +212,11 @@ class ShelfPage extends StatelessWidget {
 
 /// 我的：收藏 / 歌单 / 登录状态
 class MinePage extends StatelessWidget {
-  const MinePage({super.key, required this.state, required this.onLogin});
+  const MinePage({super.key, required this.state, required this.onLogin, this.onSettings});
 
   final AppState state;
   final VoidCallback onLogin;
+  final VoidCallback? onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -270,7 +272,15 @@ class MinePage extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 8),
+        if (onSettings != null)
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('设置与皮肤', style: MuyuTheme.body),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: onSettings,
+          ),
+        const SizedBox(height: 12),
         Text('我喜欢的音乐',
             style: MuyuTheme.section),
         const SizedBox(height: 8),
@@ -322,6 +332,19 @@ class SettingsPage extends StatelessWidget {
           Switch(
             value: state.darkMode,
             onChanged: (_) => state.toggleTheme(),
+          ),
+        ),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('皮肤与外观', style: MuyuTheme.body),
+          subtitle: Text('主题 · 歌词样式 · 沉浸光感',
+              style: MuyuTheme.muted),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AppearancePage(state: state),
+            ),
           ),
         ),
         _card(
@@ -587,6 +610,196 @@ class ArtistDetailPage extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 皮肤 / 外观页（沐语 native_settings.go + theme_accent + lyric_style_picker）。
+/// REA 事实：12 款主题（色板预览）、主题色、歌词字体（鸿蒙黑体）、
+/// 沉浸光感（超薄/标准/厚/超厚=原毛玻璃）、光感颜色（从颜色列表选 / 随封面）、
+/// 按压形变、滑动光效。
+class AppearancePage extends StatelessWidget {
+  const AppearancePage({super.key, required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('皮肤与外观')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text('主题', style: MuyuTheme.section),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.25,
+            ),
+            itemCount: kMuyuPalettes.length,
+            itemBuilder: (context, i) {
+              final p = kMuyuPalettes[i];
+              final selected = state.themeIndex == i;
+              return GestureDetector(
+                onTap: () => state.setTheme(i),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: selected ? MuyuColors.accent : MuyuColors.divider,
+                      width: selected ? 2 : 1,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: p.base,
+                            borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(10)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Container(
+                                    margin: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: p.surface,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Center(
+                                      child: Text('Aa',
+                                          style: TextStyle(
+                                              color: p.text, fontSize: 18)),
+                                    )),
+                              ),
+                              Container(width: 8, color: p.accent),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(p.label,
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600)),
+                            if (selected) ...[
+                              const SizedBox(width: 4),
+                              const Icon(Icons.check_circle,
+                                  size: 13, color: MuyuColors.accent),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          const Text('歌词样式', style: MuyuTheme.section),
+          const SizedBox(height: 8),
+          _switchRow('歌词居中', Icons.format_align_center,
+              state.lyricStyle.align == LyricAlign.center, (v) {
+            state.updateLyricStyle(state.lyricStyle.copyWith(
+                align: v ? LyricAlign.center : LyricAlign.left));
+          }),
+          _switchRow('歌词粗体', Icons.format_bold, state.lyricStyle.bold, (v) {
+            state.updateLyricStyle(state.lyricStyle.copyWith(bold: v));
+          }),
+          _switchRow('颜色随封面主色变化', Icons.palette_outlined,
+              state.lyricStyle.followCoverColor, (v) {
+            state.updateLyricStyle(
+                state.lyricStyle.copyWith(followCoverColor: v));
+          }),
+          _dropdownRow<String>('歌词字体', Icons.text_fields, state.lyricStyle.font,
+              kBuiltinFonts, (v) {
+            state.updateLyricStyle(state.lyricStyle.copyWith(font: v));
+          }),
+          const SizedBox(height: 24),
+          const Text('沉浸光感', style: MuyuTheme.section),
+          const SizedBox(height: 8),
+          _dropdownRow<ImmersiveGlass>(
+            '光感档位', Icons.blur_on, state.glass, ImmersiveGlass.values,
+            (v) => state.setGlass(v),
+            labelOf: (g) => kGlassLabels[g.index],
+          ),
+          _switchRow('按压形变', Icons.touch_app, state.glassPress,
+              (v) => state.updateSkin(glassPress: v)),
+          _switchRow('滑动光效', Icons.animation, state.glassSlide,
+              (v) => state.updateSkin(glassSlide: v)),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text('光感颜色', style: MuyuTheme.body),
+          ),
+          Wrap(
+            spacing: 12,
+            children: kGlowColors.map((c) {
+              final selected = state.glowColor == c;
+              return GestureDetector(
+                onTap: () => state.setGlowColor(c),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: c,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected ? MuyuColors.accent : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
+                  child: selected
+                      ? const Icon(Icons.check, color: Colors.white, size: 18)
+                      : null,
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 30),
+        ],
+      ),
+    );
+  }
+
+  Widget _switchRow(
+      String label, IconData icon, bool value, ValueChanged<bool> onChanged) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, color: MuyuColors.accent),
+      title: Text(label, style: MuyuTheme.body),
+      trailing: Switch(value: value, onChanged: onChanged),
+    );
+  }
+
+  Widget _dropdownRow<T>(String label, IconData icon, T value, List<T> items,
+      ValueChanged<T> onChanged, {String Function(T)? labelOf}) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, color: MuyuColors.accent),
+      title: Text(label, style: MuyuTheme.body),
+      trailing: DropdownButton<T>(
+        value: value,
+        underline: const SizedBox.shrink(),
+        items: items
+            .map((v) => DropdownMenuItem<T>(
+                value: v,
+                child: Text(labelOf == null ? v.toString() : labelOf(v))))
+            .toList(),
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
       ),
     );
   }

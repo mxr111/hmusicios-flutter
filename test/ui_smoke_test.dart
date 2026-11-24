@@ -2,6 +2,8 @@
 // 提前抓 analyze 发现不了的运行时构建错误（布局溢出、空数据、null 访问）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muyu_flutter/models_skin.dart';
+import 'package:muyu_flutter/pages/secondary_pages.dart';
 import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/theme.dart';
 import 'package:muyu_flutter/widgets/discover_page.dart';
@@ -33,10 +35,52 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('未在播放'), findsOneWidget);
+    // 默认新版样式 = sonnet 几何艺术字歌词（不再显示封面侧栏的「未在播放」）。
+    expect(find.text('正在播放'), findsOneWidget);
     expect(find.textContaining('暂无歌词'), findsOneWidget);
     expect(find.byIcon(Icons.skip_previous), findsOneWidget);
     expect(find.byIcon(Icons.skip_next), findsOneWidget);
+    state.dispose();
+  });
+
+  testWidgets('沐语 4 种播放器样式在空数据下均可构建', (tester) async {
+    final state = AppState();
+    for (final style in PlayerStyle.values) {
+      state.setPlayerStyle(style);
+      await tester.pumpWidget(MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: ImmersivePlayer(state: state)),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull,
+          reason: '${style.label} 构建抛异常');
+      expect(find.byIcon(Icons.skip_previous), findsOneWidget,
+          reason: '${style.label} 缺少播控');
+    }
+    state.dispose();
+  });
+
+  testWidgets('皮肤外观页可构建且展示 12 款主题', (tester) async {
+    final state = AppState();
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: AppearancePage(state: state),
+    ));
+    await tester.pump();
+    expect(find.text('皮肤与外观'), findsOneWidget);
+    // 12 主题色板在 GridView 里（shrinkWrap，全部已构建）。
+    for (final p in kMuyuPalettes) {
+      expect(find.text(p.label), findsOneWidget, reason: '缺少主题 ${p.label}');
+    }
+    // 歌词样式与沉浸光感在 ListView 下方，滚动后验证。
+    await tester.scrollUntilVisible(find.text('歌词样式'), 300,
+        scrollable: find.byType(Scrollable).last);
+    await tester.pump();
+    expect(find.text('歌词样式'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('沉浸光感'), 300,
+        scrollable: find.byType(Scrollable).last);
+    await tester.pump();
+    expect(find.text('沉浸光感'), findsOneWidget);
     state.dispose();
   });
 }
