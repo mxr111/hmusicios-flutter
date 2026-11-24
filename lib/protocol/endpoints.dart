@@ -33,6 +33,9 @@ class HuaweiPaths {
   static const String songDetail = '/music-metacontent-service/v1/service/song/detail/bysongcode';
   static const String albumDetail = '/music-metacontent-service/v1/service/album/detail/byalbumcode';
   static const String artistDetail = '/music-metacontent-service/v1/service/artist/detail/byartistcode';
+  /// 2.0.4 运行时实测：歌手详情走 v2 POST，body 需 songNum/albumNum。
+  static const String artistDetailV2 =
+      '/music-metacontent-service/v2/service/artist/detail/byartistcode';
   /// 歌手歌曲（REA 26 路径实测：/song/simple/byartistcode）。
   static const String artistSongs = '/music-metacontent-service/v1/service/song/simple/byartistcode';
   static const String mvFile = '/music-metacontent-service/v1/service/mvfile/bymvid';
@@ -47,8 +50,11 @@ class HuaweiPaths {
   /// 自建歌单（type=5 owned）详情，GET + playListID/start/limit。
   static const String ownedPlaylistSongs =
       '/music-userbehavior-service/v1/service/playlist/detail/all';
+  /// 2.0.4 新增的 v4 用户歌单详情（运行时内存实测路径常量）。
+  static const String userPlaylistDetailV4 =
+      '/music-userbehavior-service/v4/service/playlist/detail/all';
   static const String favorites =
-      '/music-userbehavior-service/v3/service/favorite/simple/all';
+      '/music-userbehavior-service/v5/service/favorite/simple/all';
   static const String favoriteCreate =
       '/music-userbehavior-service/v1/service/favorite/create';
   static const String favoriteDelete =

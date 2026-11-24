@@ -14,6 +14,7 @@ class DiscoverData {
     this.playlists = const <Playlist>[],
     this.charts = const <Playlist>[],
     this.radio = const <Song>[],
+    this.albums = const <Playlist>[],
   });
 
   final List<DiscoverBanner> banners;
@@ -21,6 +22,7 @@ class DiscoverData {
   final List<Playlist> playlists;
   final List<Playlist> charts;
   final List<Song> radio;
+  final List<Playlist> albums;
 }
 
 class DiscoverBanner {
@@ -142,25 +144,43 @@ class HuaweiAPI {
   /// artistSimpleInfos / albumSimpleInfos 则一并展示，没有就不造数据。
   Future<HuaweiSearchResult> searchAll(String keyword,
       {int start = 0, int limit = 30}) async {
-    final json = await _searchJson(keyword, start: start, limit: limit);
-    final songs = deepList(json, const [
+    Future<Map<String, dynamic>?> searchType(String type) async {
+      try {
+        return await _searchJson(keyword,
+            start: start, limit: limit, contentType: type);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // 运行时实测：contentType 1=歌曲、2=专辑、3=歌手、4=歌单。
+    final results = await Future.wait<Map<String, dynamic>?>(
+        <Future<Map<String, dynamic>?>>[
+      searchType('1'),
+      searchType('2'),
+      searchType('3'),
+    ]);
+    final songJson = results[0] ?? const <String, dynamic>{};
+    final albumJson = results[1] ?? const <String, dynamic>{};
+    final artistJson = results[2] ?? const <String, dynamic>{};
+    final songs = deepList(songJson, const [
       'songSimpleInfos', 'contentSimpleInfos', 'songs', 'songList',
       'result', 'list', 'data'
-    ]).map(parseSong).toList();
-    final artists = deepList(json, const [
-      'artistSimpleInfos', 'artistInfoExs', 'artistInfos'
+    ]).map(parseSong).where((s) => s.name != '未知歌曲').toList();
+    final artists = deepList(artistJson, const [
+      'artistSimpleInfos', 'artistInfoExs', 'artistInfos', 'result'
     ]).map(parseArtist).where((a) => a.name.isNotEmpty).toList();
-    final albums = deepList(json, const [
-      'albumSimpleInfos', 'albumInfoExs', 'albumInfos'
+    final albums = deepList(albumJson, const [
+      'albumSimpleInfos', 'albumInfoExs', 'albumInfos', 'result'
     ]).map(parseAlbum).where((a) => a.name.isNotEmpty).toList();
     return HuaweiSearchResult(songs: songs, artists: artists, albums: albums);
   }
 
   Future<Map<String, dynamic>> _searchJson(String keyword,
-      {required int start, required int limit}) {
+      {required int start, required int limit, String contentType = '1'}) {
     // 源码事实（API_CONTRACT §4）：全部为字符串字段。
     return gateway.request(HuaweiPaths.search, body: <String, dynamic>{
-      'contentType': '1',
+      'contentType': contentType,
       'correct': '1',
       'queryWord': keyword,
       'start': '$start',
@@ -182,14 +202,14 @@ class HuaweiAPI {
   }
 
   Future<List<Song>> _favoritesPage(int start, int limit) async {
-    // 源码事实（API_CONTRACT §3.1）：targetSnsUserID + contentTypes[1]。
-    final userId = gateway.session?.snsUserId ?? '';
+    // 运行时取证（2.0.4）：v5 服务的真实 body 只含
+    // contentTypes / favoriteQueryInfos / limit / start，用户由 token 决定。
     final json = await gateway.request(HuaweiPaths.favorites,
         body: <String, dynamic>{
-          'targetSnsUserID': userId,
-          'start': start,
-          'limit': limit,
           'contentTypes': <int>[1],
+          'favoriteQueryInfos': <dynamic>[],
+          'limit': limit,
+          'start': start,
         });
     return deepList(json, const [
       'favoriteInfos', 'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
@@ -199,19 +219,18 @@ class HuaweiAPI {
   /// 歌单发现：favorite/simple/all + contentTypes=[4,5,7]（音源插件 collections.go）。
   /// 4=收藏歌单 / 5=自建歌单 / 7=榜单。limit 先试 999，400 时退 50。
   Future<List<Playlist>> playlists() async {
-    final userId = gateway.session?.snsUserId ?? '';
     Future<List<Playlist>> page(int start, int limit) async {
       final json = await gateway.request(HuaweiPaths.playlistDetail,
           body: <String, dynamic>{
-            'targetSnsUserID': userId,
-            'start': start,
-            'limit': limit,
             'contentTypes': <int>[4, 5, 7],
+            'favoriteQueryInfos': <dynamic>[],
+            'limit': limit,
+            'start': start,
           });
       return _parsePlaylists(json);
     }
 
-    // 999 是实测可用上限（1000 返回 400）；若服务端收紧则退回 50 并翻页。
+    // v5 favorite/simple/all 同时承载收藏与歌单；999 是实测可用上限。
     final all = <Playlist>[];
     final seen = <String>{};
     try {
@@ -300,8 +319,10 @@ class HuaweiAPI {
   }
 
   Future<Song> songDetail(String songCode) async {
-    final json = await gateway.request(HuaweiPaths.songDetail,
-        body: <String, dynamic>{'songCodes': [songCode]});
+    // 运行时字符串常量：/song/detail/bysongcode? → GET + query。
+    final json = await gateway.get(
+      '${HuaweiPaths.songDetail}?songCodes=${Uri.encodeComponent(songCode)}',
+    );
     final first = deepList(json, const [
       'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
     ]);
@@ -408,36 +429,41 @@ class HuaweiAPI {
             : <AudioQuality>[AudioQuality.standard])
       ..sort((a, b) => b.index.compareTo(a.index)); // hiRes > lossless > standard
 
+    // 运行时取证：华为 fileInfos 的 quality 取值为 1/2/3/5/7。
+    // 1=MQ、2=HQ、3=SQ(FLAC)、5/7=Hi-Res。按目标档位依次回退。
+    const typeCodes = <AudioQuality, List<String>>{
+      AudioQuality.hiRes: <String>['7', '5', '3'],
+      AudioQuality.lossless: <String>['3', '2'],
+      AudioQuality.standard: <String>['1', '2'],
+    };
     for (final q in wanted) {
-      final json = await gateway.request(HuaweiPaths.playUrl,
-          body: <String, dynamic>{
-            'contentCode': songCode,
-            'contentType': '1',
-            'qualityType': q.typeCode, // 华为：1 标准 / 3 无损·Hi-Res
-          });
-
-      // 响应里必须给出音频 URL；顶层 fileURL 是音频（源码明确）。
-      final link = HuaweiGateway.firstUrl(
-          json, const ['fileURL', 'fileUrl', 'playURL', 'url']);
-      if (link == null || !_safeAudioUrl(link)) continue;
-
-      // 实际档位以响应为准（上游 decisively 决定），综合 code / level / br / codec。
-      final code = HuaweiGateway.firstString(
-              json, const ['playQuality', 'qualityType', 'level']) ??
-          '';
-      final br = HuaweiGateway.firstInt(json, const ['br', 'bitrate', 'size']);
-      final codec = (HuaweiGateway.firstString(json, const ['type']) ?? '').toLowerCase();
-
-      AudioQuality actual;
-      if (br != null && br > 0 && (code.isEmpty || code == '0')) {
-        actual = AudioQuality.fromBitrate(br); // 网易云按码率
-      } else if (code == '3' ||
-          codec.contains('flac') ||
-          AudioQuality.fromCode(code) != AudioQuality.standard) {
-        actual = AudioQuality.fromCode(code.isEmpty ? (codec.contains('flac') ? 'flac' : '') : code);
-      } else {
-        actual = AudioQuality.standard;
+      Map<String, dynamic>? json;
+      Uri? link;
+      String? requestedCode;
+      for (final typeCode in typeCodes[q] ?? const <String>['1']) {
+        final result = await gateway.request(HuaweiPaths.playUrl,
+            body: <String, dynamic>{
+              'contentCode': songCode,
+              'contentType': '1',
+              'qualityType': typeCode,
+            });
+        final candidate = HuaweiGateway.firstUrl(
+            result, const ['fileURL', 'fileUrl', 'playURL', 'url']);
+        if (candidate != null && _safeAudioUrl(candidate)) {
+          json = result;
+          link = candidate;
+          requestedCode = typeCode;
+          break;
+        }
       }
+      if (json == null || link == null) continue;
+
+      // 以实际请求到的 qualityType 为准：5/7=Hi-Res，3=SQ，1/2=标准。
+      AudioQuality actual = switch (requestedCode) {
+        '7' || '5' => AudioQuality.hiRes,
+        '3' => AudioQuality.lossless,
+        _ => AudioQuality.standard,
+      };
       // 不超过上游声明的最高档（防止响应虚报）。
       if (upstreamQualities != null && !upstreamQualities.contains(actual) &&
           upstreamQualities.isNotEmpty) {
@@ -458,7 +484,9 @@ class HuaweiAPI {
   }
 
   bool _safeAudioUrl(Uri u) {
-    if (u.scheme != 'https') return false;
+    // 华为 CDN 实际返回 http://music-pics-drcn.dbankcdn.cn/...
+    // 只接受 https 会把所有可播放地址过滤掉。
+    if (u.scheme != 'https' && u.scheme != 'http') return false;
     final host = u.host.toLowerCase();
     return const ['.dbankcdn.cn', '.tingmall.com', '.kuke.com']
         .any((s) => host.endsWith(s) && host.length > s.length);
@@ -536,14 +564,28 @@ class HuaweiAPI {
 
   /// 歌手详情（catalog.Library.Artist + API /artist/detail/byartistcode）。
   Future<Artist> artistDetail(String artistCode) async {
-    final json = await gateway.request(HuaweiPaths.artistDetail,
-        body: <String, dynamic>{'artistCode': artistCode});
+    // 运行时实测：v1 GET 返回 400/405；v2 POST 正常。
+    final json = await gateway.request(HuaweiPaths.artistDetailV2,
+        body: <String, dynamic>{
+          'artistCode': artistCode,
+          'songNum': 20,
+          'albumNum': 20,
+        });
     // 详情可能在顶层，也可能在 artistInfo / data 里；取第一个含名称的 Map。
     Map<String, dynamic> d = json;
-    for (final key in const ['artistInfo', 'artistDetail', 'data', 'result']) {
+    for (final key in const [
+      'artistInfoEx',
+      'artistInfo',
+      'artistDetail',
+      'data',
+      'result'
+    ]) {
       final nested = json[key];
       if (nested is Map<String, dynamic>) {
         d = nested;
+        if (nested['artistInfo'] is Map<String, dynamic>) {
+          d = nested['artistInfo'] as Map<String, dynamic>;
+        }
         break;
       }
     }
@@ -564,12 +606,10 @@ class HuaweiAPI {
   Future<List<Song>> artistSongs(String artistCode,
       {int start = 0, int limit = 30, bool fetchAll = true}) async {
     Future<List<Song>> page(int offset, int size) async {
-      final json = await gateway.request(HuaweiPaths.artistSongs,
-          body: <String, dynamic>{
-            'artistCode': artistCode,
-            'start': offset,
-            'limit': size,
-          });
+      final json = await gateway.get(
+        '${HuaweiPaths.artistSongs}?artistCode=${Uri.encodeComponent(artistCode)}'
+        '&start=$offset&limit=$size',
+      );
       return deepList(json, const [
         'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
       ]).map(parseSong).toList();
@@ -891,7 +931,8 @@ class HuaweiAPI {
   /// 其余 column 按 contentID/contentType 分流为新歌 / 歌单 / 榜单 / Banner。
   /// 每个板块独立容错；接口无数据即空状态，绝不填假内容。
   Future<DiscoverData> discover() async {
-    final json = await gateway.request(HuaweiPaths.home);
+    // 运行时实测：首页聚合接口必须 GET；POST 返回 405。
+    final json = await gateway.get(HuaweiPaths.home);
     return parseDiscover(json);
   }
 
@@ -941,14 +982,12 @@ class HuaweiAPI {
   /// 榜单歌曲：chartID / chartCode 来自 REA 符号与堆字段。
   Future<List<Song>> chartSongs(String chartId) async {
     return _collectSongPages((start, limit) async {
-      final json = await gateway.request(HuaweiPaths.chartDetail,
-          body: <String, dynamic>{
-            'chartID': chartId,
-            'chartCode': chartId,
-            'contentType': 1,
-            'start': start,
-            'limit': limit,
-          });
+      // 运行时实测：榜单详情必须 GET；POST 返回 405。
+      final json = await gateway.get(
+        '${HuaweiPaths.chartDetail}?chartID=${Uri.encodeComponent(chartId)}'
+        '&chartId=${Uri.encodeComponent(chartId)}'
+        '&contentType=1&start=$start&limit=$limit',
+      );
       return deepList(json, const [
         'songSimpleInfos', 'contentSimpleInfos', 'songs', 'list', 'data'
       ]).map(parseSong).toList();
@@ -982,65 +1021,79 @@ class HuaweiAPI {
 
   /// 解析沐语首页 JSON。列名全部由 REA 反编译给出的字符串常量实测，不是猜测。
   static DiscoverData parseDiscover(dynamic root) {
-    final columns = deepList(root, const ['columnInfoExs']);
+    final columns = _findNamedList(root, 'columnInfoExs');
     final songs = <Song>[];
     final playlists = <Playlist>[];
     final charts = <Playlist>[];
+    final albums = <Playlist>[];
     final radio = <Song>[];
     final banners = <DiscoverBanner>[];
 
     for (final column in columns) {
-      final contents = deepList(column, const ['contentSimpleInfos']);
-      final columnId = HuaweiGateway.firstString(column,
-              const ['columnID', 'columnId', 'contentID']) ??
-          '';
+      final contents = _findNamedList(column, 'contentSimpleInfos');
       for (final content in contents) {
-        final cid = HuaweiGateway.firstString(content,
-                const ['contentID', 'contentCode', 'ID']) ??
-            '';
-        // REA: contentID=pmf001 → childSimpleInfos → listRcmInfos（电台推荐）
-        if (cid == 'pmf001' || columnId == 'pmf001') {
-          final children = deepList(content, const ['childSimpleInfos']);
-          for (final child in children) {
-            final infos = deepList(child, const ['listRcmInfos']);
-            radio.addAll(infos.map(parseSong));
-          }
-          continue;
+        // 运行时实测 contentType 语义：
+        // 1=歌曲 2=专辑 4=歌单 7=榜单 11=Banner/入口 12=功能卡
+        // 96=分区（childSimpleInfos） 6/10/20=分类/MV/有声书。
+        final type = HuaweiGateway.firstString(content, const ['contentType']) ?? '';
+        switch (type) {
+          case '1':
+            songs.add(parseSong(content));
+            break;
+          case '2':
+            albums.add(parseAlbum(content));
+            break;
+          case '4':
+            playlists.add(_withKind(parsePlaylist(content), 'collected'));
+            break;
+          case '7':
+            charts.add(_withKind(parsePlaylist(content), 'chart'));
+            break;
+          case '11':
+            final banner = _bannerFrom(content);
+            if (banner != null) banners.add(banner);
+            break;
+          case '96':
+            final children = _findNamedList(content, 'childSimpleInfos');
+            for (final child in children) {
+              final childType =
+                  HuaweiGateway.firstString(child, const ['contentType']) ?? '';
+              if (childType == '2') {
+                albums.add(parseAlbum(child));
+              } else {
+                songs.add(parseSong(child));
+              }
+            }
+            break;
+          case '12':
+            // 功能卡（现在就听/私人FM/歌手/歌单）不进入歌曲流。
+            break;
+          default:
+            // 仅当明确带 listRcmInfos（电台推荐）时才取歌。
+            final radioInfos = _findNamedList(content, 'listRcmInfos');
+            if (radioInfos.isNotEmpty) {
+              radio.addAll(radioInfos.map(parseSong));
+            }
+            // 兼容 1.2.0 的旧结构：content 直接带 songSimpleInfos。
+            final nestedSongs = _findNamedList(content, 'songSimpleInfos');
+            if (nestedSongs.isNotEmpty) {
+              songs.addAll(nestedSongs.map(parseSong));
+            }
         }
-        final nestedSongs = deepList(content, const [
-          'songSimpleInfos', 'listRcmInfos', 'contentSimpleInfos'
-        ]);
-        songs.addAll(nestedSongs.map(parseSong));
-        final nestedLists = deepList(content, const [
-          'playListInfos', 'recommendPlayListInfos', 'chartInfos'
-        ]);
-        for (final item in nestedLists) {
-          final p = parsePlaylist(item);
-          if (cid.contains('chart') || columnId.contains('chart') ||
-              p.id.startsWith('chart')) {
-            charts.add(p);
-          } else {
-            playlists.add(p);
-          }
-        }
-        final banner = _bannerFrom(content);
-        if (banner != null) banners.add(banner);
       }
     }
 
-    // 兜底：接口直接给出扁平数组（某些版本 page/detail/all 会这样返回）。
-    if (songs.isEmpty) {
-      songs.addAll(deepList(root, const [
-        'dailyRecInfos', 'newSongInfos', 'songSimpleInfos'
-      ]).map(parseSong));
-    }
-    for (final item in deepList(root, const ['chartInfos'])) {
-      charts.add(parsePlaylist(item));
-    }
-    for (final item in deepList(root, const ['playListInfos'])) {
-      playlists.add(parsePlaylist(item));
-    }
     if (banners.isEmpty) banners.addAll(parseBanners(root));
+
+    final seenSongs = <String>{};
+    songs.removeWhere((s) =>
+        s.name == '未知歌曲' ||
+        s.name.isEmpty ||
+        (s.id.isNotEmpty && !seenSongs.add(s.id)));
+    final seenLists = <String>{};
+    playlists.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
+    charts.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
+    albums.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
 
     return DiscoverData(
       banners: banners.take(8).toList(),
@@ -1048,7 +1101,39 @@ class HuaweiAPI {
       playlists: playlists,
       charts: charts,
       radio: radio,
+      albums: albums,
     );
+  }
+
+  static Playlist _withKind(Playlist p, String kind) => Playlist(
+        id: p.id,
+        name: p.name,
+        cover: p.cover,
+        songCount: p.songCount,
+        kind: kind,
+      );
+
+  /// 严格按 key 查找嵌套数组；不会把任意子数组误当成目标 key。
+  /// `deepList` 在遇到 List 根时会直接返回所有 Map，容易把 songSimpleInfos
+  /// 误当成 listRcmInfos，因此首页解析必须用这个严格版本。
+  static List<Map<String, dynamic>> _findNamedList(dynamic root, String key) {
+    if (root is Map) {
+      final direct = root[key];
+      if (direct is List) {
+        final maps = direct.whereType<Map<String, dynamic>>().toList();
+        if (maps.isNotEmpty) return maps;
+      }
+      for (final value in root.values) {
+        final found = _findNamedList(value, key);
+        if (found.isNotEmpty) return found;
+      }
+    } else if (root is List) {
+      for (final value in root) {
+        final found = _findNamedList(value, key);
+        if (found.isNotEmpty) return found;
+      }
+    }
+    return const <Map<String, dynamic>>[];
   }
 
   static DiscoverBanner? _bannerFrom(Map<String, dynamic> d) {
@@ -1094,7 +1179,7 @@ class HuaweiAPI {
           ]) ??
           '',
       name: HuaweiGateway.firstString(d, const [
-            'artistName', 'name', 'artNM', 'NM', 'title'
+            'artistName', 'contentName', 'name', 'artNM', 'NM', 'title'
           ]) ??
           '',
       cover: HuaweiGateway.firstUrl(d, const [
@@ -1115,7 +1200,7 @@ class HuaweiAPI {
           ]) ??
           '',
       name: HuaweiGateway.firstString(d, const [
-            'albumName', 'name', 'albNM', 'title'
+            'albumName', 'contentName', 'name', 'albNM', 'title'
           ]) ??
           '',
       cover: HuaweiGateway.firstUrl(d, const [

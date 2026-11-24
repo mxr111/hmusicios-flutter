@@ -26,54 +26,12 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  static final List<HomeCardSpec> cards = <HomeCardSpec>[
-    const HomeCardSpec(
-      badge: '♫  Music FM',
-      title: '现在就听',
-      subtitle: '后来的我们 · 五月天',
-      gradient: MuyuColors.cardNow,
-      icon: Icons.radio,
-      action: 'radio',
-    ),
-    const HomeCardSpec(
-      badge: 'November',
-      title: '每日30首',
-      subtitle: '不能说的秘密 · 周杰伦',
-      gradient: MuyuColors.cardDaily,
-      icon: Icons.calendar_month,
-      action: 'daily',
-    ),
-    const HomeCardSpec(
-      badge: '♥',
-      title: '心动模式',
-      subtitle: '想见你想见你想见你',
-      gradient: MuyuColors.cardHeart,
-      icon: Icons.favorite,
-      action: 'heart',
-    ),
-    const HomeCardSpec(
-      badge: '♫  New',
-      title: '新歌推荐',
-      subtitle: '昨天，今天：莫文蔚',
-      gradient: MuyuColors.cardNew,
-      icon: Icons.new_releases_outlined,
-      action: 'new',
-    ),
-    const HomeCardSpec(
-      badge: '热歌速递',
-      title: '热歌速递',
-      subtitle: 'DeepSeek',
-      gradient: MuyuColors.cardHot,
-      icon: Icons.whatshot,
-      action: 'hot',
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
     // 首页列表只显示真实接口数据，不再用硬编码歌曲冒充（用户明确要求）。
     final songs = state.homeSongs;
+    final cards = _cards(state);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 108),
@@ -90,7 +48,7 @@ class _HomePageState extends State<HomePage> {
             separatorBuilder: (_, _) => const SizedBox(width: 16),
             itemBuilder: (context, i) => HomeCard(
               spec: cards[i],
-              onPlay: () => _playCard(cards[i].action),
+              onPlay: () => _playCard(state, cards[i].action),
             ),
           ),
         ),
@@ -154,6 +112,75 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// 顶部卡片只展示接口真实返回的第一首歌/歌单/榜单，不再写死歌名。
+  List<HomeCardSpec> _cards(AppState state) {
+    final discover = state.discover;
+    final now = state.homeSongs.isNotEmpty ? state.homeSongs.first : null;
+    final newSong =
+        discover.newSongs.isNotEmpty ? discover.newSongs.first : now;
+    final heart = discover.radio.isNotEmpty ? discover.radio.first : now;
+    final daily = _firstWhereOrNull(
+        discover.playlists, (Playlist p) => p.id == 'a001');
+    final hot = _firstWhereOrNull(
+        discover.charts, (Playlist p) => p.name.contains('热歌'));
+    String subtitle(Song? song, String fallback) =>
+        song == null ? fallback : '${song.name} · ${song.artistText}';
+    return <HomeCardSpec>[
+      HomeCardSpec(
+        badge: '♫  Music FM',
+        title: '现在就听',
+        subtitle: subtitle(now, '点击加载真实推荐'),
+        gradient: MuyuColors.cardNow,
+        icon: Icons.radio,
+        action: 'radio',
+        cover: now?.cover,
+      ),
+      HomeCardSpec(
+        badge: 'November',
+        title: '每日30首',
+        subtitle: daily?.name ?? '点击打开每日推荐',
+        gradient: MuyuColors.cardDaily,
+        icon: Icons.calendar_month,
+        action: 'daily',
+        cover: daily?.cover,
+      ),
+      HomeCardSpec(
+        badge: '♥',
+        title: '心动模式',
+        subtitle: subtitle(heart, '私人电台推荐'),
+        gradient: MuyuColors.cardHeart,
+        icon: Icons.favorite,
+        action: 'heart',
+        cover: heart?.cover,
+      ),
+      HomeCardSpec(
+        badge: '♫  New',
+        title: '新歌推荐',
+        subtitle: subtitle(newSong, '加载最新歌曲'),
+        gradient: MuyuColors.cardNew,
+        icon: Icons.new_releases_outlined,
+        action: 'new',
+        cover: newSong?.cover,
+      ),
+      HomeCardSpec(
+        badge: '热歌速递',
+        title: '热歌速递',
+        subtitle: hot?.name ?? '点击打开热歌榜',
+        gradient: MuyuColors.cardHot,
+        icon: Icons.whatshot,
+        action: 'hot',
+        cover: hot?.cover,
+      ),
+    ];
+  }
+
+  static T? _firstWhereOrNull<T>(Iterable<T> values, bool Function(T) test) {
+    for (final value in values) {
+      if (test(value)) return value;
+    }
+    return null;
+  }
+
   Widget _searchField() {
     return SizedBox(
       width: 260,
@@ -207,7 +234,54 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _playCard(String action) => widget.state.playCard(action);
+  Future<void> _playCard(AppState state, String action) async {
+    switch (action) {
+      case 'daily':
+        final daily = _firstWhereOrNull(
+            state.discover.playlists, (Playlist p) => p.id == 'a001');
+        if (daily != null) {
+          await state.openPlaylist(daily);
+        } else {
+          await state.loadHome();
+        }
+        return;
+      case 'hot':
+        final chart = _firstWhereOrNull(
+            state.discover.charts, (Playlist p) => p.name.contains('热歌'));
+        if (chart != null) {
+          await state.openPlaylist(chart);
+        } else {
+          await state.loadHome();
+        }
+        return;
+      case 'heart':
+        final list = state.discover.radio.isNotEmpty
+            ? state.discover.radio
+            : state.homeSongs;
+        if (list.isNotEmpty) {
+          await state.play(list.first, queue: list);
+        } else {
+          await state.loadHome();
+        }
+        return;
+      case 'new':
+        final list = state.discover.newSongs.isNotEmpty
+            ? state.discover.newSongs
+            : state.homeSongs;
+        if (list.isNotEmpty) {
+          await state.play(list.first, queue: list);
+        } else {
+          await state.loadHome();
+        }
+        return;
+      default:
+        if (state.homeSongs.isNotEmpty) {
+          await state.play(state.homeSongs.first, queue: state.homeSongs);
+        } else {
+          await state.loadHome();
+        }
+    }
+  }
 }
 
 /// 顶部音源切换：华为 / 网易云 / 酷狗 / QQ 四个真实音源。
@@ -389,12 +463,12 @@ class HomeCard extends StatelessWidget {
       case 'radio':
         return Padding(
           padding: const EdgeInsets.only(bottom: 26),
-          child: CoverArt(size: 104, radius: 10, seed: 0),
+          child: CoverArt(url: spec.cover, size: 104, radius: 10, seed: 0),
         );
       case 'new':
         return Padding(
           padding: const EdgeInsets.only(bottom: 26),
-          child: CoverArt(size: 100, radius: 6, seed: 3),
+          child: CoverArt(url: spec.cover, size: 100, radius: 6, seed: 3),
         );
       default:
         return Icon(spec.icon, size: 72, color: fg.withValues(alpha: 0.85));

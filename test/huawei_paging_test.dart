@@ -39,35 +39,53 @@ class _PagedGateway extends HuaweiGateway {
       };
     }
     if (path == HuaweiPaths.artistSongs) {
-      final start = body['start'] as int? ?? 0;
-      final limit = body['limit'] as int? ?? 30;
+      throw StateError('artistSongs should use GET');
+    }
+    if (path == HuaweiPaths.search) {
+      switch ('${body['contentType']}') {
+        case '2':
+          return <String, dynamic>{
+            'albumSimpleInfos': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'contentID': 'al1',
+                'contentName': '叶惠美',
+                'totalCount': 11,
+              },
+            ],
+          };
+        case '3':
+          return <String, dynamic>{
+            'artistSimpleInfos': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'artistCode': 'a1',
+                'artistName': '周杰伦',
+                'bigImgURL': 'https://test.dbankcdn.cn/a.jpg',
+              },
+            ],
+          };
+        default:
+          return <String, dynamic>{
+            'songSimpleInfos': <Map<String, dynamic>>[
+              <String, dynamic>{'contentID': 's1', 'contentName': '晴天'},
+            ],
+          };
+      }
+    }
+    throw StateError('unexpected path: $path');
+  }
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    if (path.startsWith(HuaweiPaths.artistSongs)) {
+      final uri = Uri.parse('https://x$path');
+      final start = int.tryParse(uri.queryParameters['start'] ?? '0') ?? 0;
+      final limit = int.tryParse(uri.queryParameters['limit'] ?? '30') ?? 30;
       artistStarts.add(start);
       return <String, dynamic>{
         'songSimpleInfos': _page(artistTotal, start, limit),
       };
     }
-    if (path == HuaweiPaths.search) {
-      return <String, dynamic>{
-        'songSimpleInfos': <Map<String, dynamic>>[
-          <String, dynamic>{'contentID': 's1', 'contentName': '晴天'},
-        ],
-        'artistSimpleInfos': <Map<String, dynamic>>[
-          <String, dynamic>{
-            'artistCode': 'a1',
-            'artistName': '周杰伦',
-            'bigImgURL': 'https://test.dbankcdn.cn/a.jpg',
-          },
-        ],
-        'albumSimpleInfos': <Map<String, dynamic>>[
-          <String, dynamic>{
-            'albumCode': 'al1',
-            'albumName': '叶惠美',
-            'songNum': 11,
-          },
-        ],
-      };
-    }
-    throw StateError('unexpected path: $path');
+    throw StateError('unexpected get: $path');
   }
 }
 

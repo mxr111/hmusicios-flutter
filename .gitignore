@@ -55,6 +55,8 @@ rea_evidence/_regions/
 rea_evidence/_recent_turns.md
 rea_evidence/_uncommitted.diff
 rea_evidence/_strip.py
+rea_evidence/ghidra_proj/
+rea_evidence/decomp_204.txt
 
 # 本地构建产物
 *.ipa

@@ -226,6 +226,7 @@ class HomeCardSpec {
     required this.gradient,
     required this.icon,
     required this.action,
+    this.cover,
   });
   final String badge;
   final String title;
@@ -233,4 +234,5 @@ class HomeCardSpec {
   final List<Color> gradient;
   final IconData icon;
   final String action; // radio / daily / heart / new / hot
+  final Uri? cover;
 }

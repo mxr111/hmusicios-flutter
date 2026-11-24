@@ -62,9 +62,14 @@ class HuaweiGateway {
   String _newDeviceId() =>
       List.generate(32, (_) => _random.nextInt(16).toRadixString(16)).join();
 
+  /// 运行时取证：Authorization 的 nonce 是 24 个随机字节的 48 位小写 hex，
+  /// 不是 24 位字母数字（后者会被网关判为无效凭据）。
   String _nonce() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    return List.generate(24, (_) => chars[_random.nextInt(chars.length)]).join();
+    final buffer = StringBuffer();
+    for (var i = 0; i < 24; i++) {
+      buffer.write(_random.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   /// Digest 鉴权头。token 为空时用于 loginex（无会话调用）。
@@ -77,17 +82,14 @@ class HuaweiGateway {
   }
 
   Map<String, String> headers([String? tokenOverride]) => <String, String>{
-        'x-client-version': HuaweiPaths.clientVersion,
-        'x-deviceid': deviceId,
-        'x-musicuuid': deviceId,
-        'x-hw-client': HuaweiPaths.packageName,
-        'x-client-package': HuaweiPaths.packageName,
-        'x-device-context': HuaweiPaths.deviceContext,
-        'x-recommend': '1',
+        // 运行时取证（Muyu 2.0.4 实际 HTTP/1.1 请求）：
+        // Host / User-Agent=设备串 / Accept / Authorization / Content-Type /
+        // Accept-Encoding。没有 x-client-version、x-deviceid 等头。
+        // 多余的 x-* 头会让华为网关返回 990000。
+        'User-Agent': HuaweiPaths.deviceContext,
         'Accept': 'application/json',
-        'Accept-Language': 'zh-CN',
-        'Accept-Lang': 'zh-CN',
-        'Content-Type': 'application/json',
+        'Accept-Encoding': 'gzip',
+        'Content-Type': 'application/json;charset=UTF-8',
         'Authorization': digestHeader(tokenOverride),
       };
 
@@ -207,7 +209,7 @@ class HuaweiGateway {
         if (form) {
           req.headers.contentType = ContentType.parse('application/x-www-form-urlencoded');
         } else {
-          req.headers.contentType = ContentType.json;
+          req.headers.contentType = ContentType.parse('application/json;charset=UTF-8');
         }
         req.write(form ? body.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value.toString())}').join('&') : jsonEncode(body));
       }

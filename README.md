@@ -3,10 +3,12 @@
 基于 **REA 对沐语 Windows 客户端（v2.0.3 / v2.0.4）的静态逆向 + 运行时进程内存取证**，并用同源项目 **tinglan（Go+Viva 华为音乐客户端）** 做源码级交叉校正，用 Flutter 重写其界面与四音源播放闭环。
 
 > 🟢 **v3（2026-11-24）**：四音源（华为 / 网易云 / 酷狗 / QQ）+ 本地音乐 + 登录态持久化 + 全量分页。
+> - **华为 990000 已修复**：运行时抓到真实请求头——`User-Agent` 是设备串、`nonce` 是 48 位 hex、业务请求只带 6 个头；收藏改用 v5、榜单/首页改 GET、歌手详情改 v2 POST。详见 `rea_evidence/HUAWEI_204_PROTOCOL.md`。
 > - 华为收藏 / 自建歌单 / 收藏歌单 / 歌手歌曲不再截断在 50 首，按 50 一页翻到短页（去重、无进展即停）。
 > - 启动时恢复华为音乐 token / 网易云 MUSIC_U / 酷狗 Cookie / QQ Cookie，不再每次打开都重新扫码。
 > - 搜索页新增「歌曲 / 歌手 / 专辑」三栏；华为响应含 artistSimpleInfos / albumSimpleInfos 时直接展示。
 > - 本地音乐：系统文件选择 → 复制进沙箱 → 解析 ID3v2 / FLAC Vorbis → 持久化 → 直接播放。
+> - 首页不再写死歌名：卡片副标题/封面来自真实接口；「每日30首」打开 `a001` 歌单，「热歌速递」打开真实榜单。
 > - 酷狗 / QQ 协议见 `rea_evidence/PROVIDER_PROTOCOL_EVIDENCE.md`；签名算法来自公开协议，标注「待真机验证」。
 
 > 🔴 **v2 重大修正（2026-11-23）**：REA 反编译拿不到函数伪代码（本机无 Ghidra/IDA/Hopper/Kuna 引擎），但找到了同源项目 tinglan 的源码，纠正了此前两个致命错误：
@@ -120,7 +122,8 @@ flutter build ipa --no-codesign # 仅 macOS + Xcode
 
 ## 七、已知缺口
 
-- 🔴 **华为业务请求的额外签名仍未还原**：若接口返回 401/403，需自有账号抓包补齐；设置页支持手动填入 `access_token` 调试。
+- 华为首页/收藏/歌单/搜索/榜单/歌手/专辑/取流均已用真实账号验证；`querydaily`、`privatefm`、`recommend/playlist` 仍返回 400，UI 改用首页真实数据兜底。
+- 歌手详情走 v2 POST；歌曲详情 query 字段尚未抓到 live URL，当前使用 `songCodes=`。
 - 酷狗 `signature` / QQ `zzcSign` 已按二进制字符串与公开协议实现，并写了离线单测，但**未用真实账号联网验证**；失败时 UI 会显示真实错误。
 - 酷狗 / QQ 目前只做「Cookie 手动登录」+ 搜索 / 歌单 / 歌词 / 取流 / 评论；扫码登录、收藏与歌单增删尚未接入。
 - 本地音乐已解析 ID3v2 / FLAC 标签，但内嵌封面（APIC / FLAC PICTURE）暂未显示，使用渐变占位。
