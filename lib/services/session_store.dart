@@ -10,6 +10,9 @@ class SessionSnapshot {
     this.huaweiUserId = '',
     this.huaweiAccountToken = '',
     this.huaweiNickname = '',
+    this.huaweiAvatar = '',
+    this.huaweiMemberLabel = '',
+    this.huaweiIsMember = false,
     this.neteaseMusicU = '',
     this.neteaseCsrf = '',
     this.neteaseNickname = '',
@@ -24,6 +27,9 @@ class SessionSnapshot {
   final String huaweiUserId;
   final String huaweiAccountToken;
   final String huaweiNickname;
+  final String huaweiAvatar;
+  final String huaweiMemberLabel;
+  final bool huaweiIsMember;
   final String neteaseMusicU;
   final String neteaseCsrf;
   final String neteaseNickname;
@@ -38,6 +44,9 @@ class SessionSnapshot {
         'huaweiUserId': huaweiUserId,
         'huaweiAccountToken': huaweiAccountToken,
         'huaweiNickname': huaweiNickname,
+        'huaweiAvatar': huaweiAvatar,
+        'huaweiMemberLabel': huaweiMemberLabel,
+        'huaweiIsMember': huaweiIsMember,
         'neteaseMusicU': neteaseMusicU,
         'neteaseCsrf': neteaseCsrf,
         'neteaseNickname': neteaseNickname,
@@ -54,6 +63,9 @@ class SessionSnapshot {
       huaweiUserId: '${json['huaweiUserId'] ?? ''}',
       huaweiAccountToken: '${json['huaweiAccountToken'] ?? ''}',
       huaweiNickname: '${json['huaweiNickname'] ?? ''}',
+      huaweiAvatar: '${json['huaweiAvatar'] ?? ''}',
+      huaweiMemberLabel: '${json['huaweiMemberLabel'] ?? ''}',
+      huaweiIsMember: json['huaweiIsMember'] == true,
       neteaseMusicU: '${json['neteaseMusicU'] ?? ''}',
       neteaseCsrf: '${json['neteaseCsrf'] ?? ''}',
       neteaseNickname: '${json['neteaseNickname'] ?? ''}',

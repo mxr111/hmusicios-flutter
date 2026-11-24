@@ -48,5 +48,30 @@ void main() {
         }
       }
     }
+
+    final search = await api.searchAll('周杰伦');
+    for (final song in search.songs.take(3)) {
+      try {
+        final files = await api.audioFiles(song.id);
+        // ignore: avoid_print
+        print('SEARCH_OK ${song.name} -> ${files.first.quality.name} '
+            '${files.first.url.path.split('/').last}');
+      } catch (e) {
+        // ignore: avoid_print
+        print('SEARCH_ERR ${song.name} [${song.id}] -> $e');
+      }
+    }
+    final chart = await api.chartSongs('24926');
+    for (final song in chart.take(3)) {
+      try {
+        final files = await api.audioFiles(song.id);
+        // ignore: avoid_print
+        print('CHART_OK ${song.name} -> ${files.first.quality.name} '
+            '${files.first.url.path.split('/').last}');
+      } catch (e) {
+        // ignore: avoid_print
+        print('CHART_ERR ${song.name} [${song.id}] -> $e');
+      }
+    }
   }, skip: token.isEmpty, timeout: const Timeout(Duration(minutes: 3)));
 }

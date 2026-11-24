@@ -10,6 +10,7 @@ import '../protocol/netease_api.dart';
 import '../protocol/qq_api.dart';
 import '../theme.dart';
 import 'audio_controller.dart';
+import 'app_log.dart';
 import 'local_library.dart';
 import 'session_store.dart';
 
@@ -21,6 +22,10 @@ class AppState extends ChangeNotifier {
     local.addListener(notifyListeners);
     // 授权码换到的账号 token / 音乐 token 变化时立刻持久化。
     api.gateway.onSessionChanged = () => persistSession();
+    api.onProfileChanged = () {
+      persistSession();
+      notifyListeners();
+    };
   }
 
   final SessionStore _sessionStore;
@@ -51,6 +56,17 @@ class AppState extends ChangeNotifier {
         MusicSource.qq => qq.isLoggedIn ? qq.displayName : '未登录',
       };
 
+  String get accountAvatar => source == MusicSource.huawei
+      ? (api.avatarUrl ?? '')
+      : (source == MusicSource.kugou
+          ? (kugou.gateway.session?.avatarUrl ?? '')
+          : '');
+
+  String get accountMemberLabel => source == MusicSource.huawei
+      ? (api.memberLabel ??
+          (api.isMember ? '华为音乐会员' : (api.isLoggedIn ? '华为音乐' : '')))
+      : '';
+
   late final MuyuAudioController audio =
       MuyuAudioController(api, netease: netease, kugou: kugou, qq: qq);
 
@@ -63,9 +79,12 @@ class AppState extends ChangeNotifier {
 
   /// 12 款主题索引（源码事实 tinglan/theme.go），默认晨光。
   int themeIndex = 0;
+  int? _lastLightTheme;
+  int? _lastDarkTheme = 6;
   MuyuPalette get palette => kMuyuPalettes[themeIndex.clamp(0, kMuyuPalettes.length - 1)];
   bool get darkMode => palette.dark; // 兼容旧 ThemeMode 逻辑
   int homePage = 1;
+  int _homeRefreshSeed = 0;
 
   /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
   PlayerStyle playerStyle = PlayerStyle.modern;
@@ -181,12 +200,37 @@ class AppState extends ChangeNotifier {
           data = DiscoverData(playlists: lists, charts: charts);
         }
       }
-      discover = data;
+      discover = _rotateDiscover(data);
       homeSongs = discover.newSongs;
       playlists = discover.playlists;
       charts = discover.charts;
       discoverLoaded = true;
     });
+  }
+
+  /// 首页「刷新」：服务端同一账号的推荐接口目前返回同一批内容，
+  /// 这里在真实数据上做确定性的轮换，保证每次刷新首屏会变化。
+  Future<void> refreshHome() async {
+    _homeRefreshSeed++;
+    await loadHome();
+  }
+
+  DiscoverData _rotateDiscover(DiscoverData data) {
+    if (_homeRefreshSeed == 0) return data;
+    return DiscoverData(
+      banners: data.banners,
+      newSongs: _rotate(data.newSongs),
+      playlists: _rotate(data.playlists),
+      charts: data.charts,
+      radio: _rotate(data.radio),
+      albums: _rotate(data.albums),
+    );
+  }
+
+  List<T> _rotate<T>(List<T> values) {
+    if (values.length <= 1) return values;
+    final offset = _homeRefreshSeed % values.length;
+    return <T>[...values.skip(offset), ...values.take(offset)];
   }
 
   /// 网易云首页推荐流：轮播 / 歌单 / 日推 / 新歌 / 私人FM / 独家放送。
@@ -648,14 +692,20 @@ class AppState extends ChangeNotifier {
 
   Future<void> _loadLyrics(Song song) async {
     try {
-      lyrics = switch (source) {
-        MusicSource.netease => await netease.lyrics(song.id),
-        MusicSource.kugou => await kugou.lyrics(song.id),
-        MusicSource.qq => await qq.lyrics(song.id),
-        MusicSource.huawei => await api.lyrics(song.id),
-      };
-    } catch (_) {
+      if (source == MusicSource.huawei && song.lyricUrl != null) {
+        lyrics = await api.lyricsFromUrl(song.lyricUrl!);
+        if (lyrics.isEmpty) lyrics = await api.lyrics(song.id);
+      } else {
+        lyrics = switch (source) {
+          MusicSource.netease => await netease.lyrics(song.id),
+          MusicSource.kugou => await kugou.lyrics(song.id),
+          MusicSource.qq => await qq.lyrics(song.id),
+          MusicSource.huawei => await api.lyrics(song.id),
+        };
+      }
+    } catch (e) {
       lyrics = <LyricLine>[];
+      AppLog.add('lyrics', '${song.name} [${song.id}]: $e');
     }
     notifyListeners();
   }
@@ -714,13 +764,34 @@ class AppState extends ChangeNotifier {
 
   /// 循环切换 12 款主题。
   void toggleTheme() {
-    themeIndex = (themeIndex + 1) % kMuyuPalettes.length;
-    notifyListeners();
-    persistSession();
+    setTheme((themeIndex + 1) % kMuyuPalettes.length);
   }
 
   void setTheme(int index) {
     themeIndex = index.clamp(0, kMuyuPalettes.length - 1);
+    if (palette.dark) {
+      _lastDarkTheme = themeIndex;
+    } else {
+      _lastLightTheme = themeIndex;
+    }
+    notifyListeners();
+    persistSession();
+  }
+
+  /// 设置页的深色/浅色开关：在最近一次浅色与深色主题之间切换，
+  /// 不再顺次循环 12 套主题。
+  void toggleDarkMode() {
+    if (palette.dark) {
+      themeIndex = _lastLightTheme ?? 0;
+    } else {
+      _lastLightTheme = themeIndex;
+      themeIndex = _lastDarkTheme ?? 6;
+    }
+    if (palette.dark) {
+      _lastDarkTheme = themeIndex;
+    } else {
+      _lastLightTheme = themeIndex;
+    }
     notifyListeners();
     persistSession();
   }
@@ -748,6 +819,14 @@ class AppState extends ChangeNotifier {
             : null,
         nick: snapshot.huaweiNickname,
       );
+      api.avatarUrl =
+          snapshot.huaweiAvatar.isEmpty ? null : snapshot.huaweiAvatar;
+      api.memberLabel = snapshot.huaweiMemberLabel.isEmpty
+          ? null
+          : snapshot.huaweiMemberLabel;
+      api.isMember = snapshot.huaweiIsMember;
+      // 后台补全真实昵称/头像/会员；失败不影响启动。
+      api.refreshProfile();
     }
     if (snapshot.neteaseMusicU.isNotEmpty) {
       netease.signInWithCookies(
@@ -771,6 +850,11 @@ class AppState extends ChangeNotifier {
     );
     audio.source = source;
     themeIndex = snapshot.themeIndex.clamp(0, kMuyuPalettes.length - 1);
+    if (palette.dark) {
+      _lastDarkTheme = themeIndex;
+    } else {
+      _lastLightTheme = themeIndex;
+    }
     notifyListeners();
   }
 
@@ -782,6 +866,9 @@ class AppState extends ChangeNotifier {
       huaweiUserId: api.gateway.session?.snsUserId ?? '',
       huaweiAccountToken: api.gateway.accountToken ?? '',
       huaweiNickname: api.displayName ?? '',
+      huaweiAvatar: api.avatarUrl ?? '',
+      huaweiMemberLabel: api.memberLabel ?? '',
+      huaweiIsMember: api.isMember,
       neteaseMusicU: netease.gateway.session?.musicU ?? '',
       neteaseCsrf: netease.gateway.session?.csrf ?? '',
       neteaseNickname: netease.gateway.session?.nickname ?? '',
@@ -821,6 +908,7 @@ class AppState extends ChangeNotifier {
       await work();
     } catch (e) {
       error = e.toString();
+      AppLog.add('state', error!);
       onError?.call(error!);
     } finally {
       loading = false;

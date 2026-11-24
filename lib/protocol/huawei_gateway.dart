@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import '../services/app_log.dart';
 import 'endpoints.dart';
 
 /// 网关错误：只保留「阶段 / 状态 / 会话失效」，不把响应体写进异常。
@@ -24,7 +25,11 @@ class _RawResponse {
 /// 音乐会话（源码事实 tinglan/internal/huawei/client.go Session）：
 /// token 是 loginex 返回的音乐 token，不是 OAuth access token。
 class MusicSession {
-  MusicSession({required this.token, required this.snsUserId, this.expireTime = ''});
+  MusicSession({
+    required this.token,
+    required this.snsUserId,
+    this.expireTime = '',
+  });
   final String token;
   final String snsUserId;
   final String expireTime;
@@ -39,7 +44,8 @@ class MusicSession {
 /// 业务成功需 HTTP 2xx 且 result.resultCode == "000000"。
 class HuaweiGateway {
   HuaweiGateway({HttpClient? client}) : _client = client ?? HttpClient() {
-    _client.userAgent = '${HuaweiPaths.packageName}/${HuaweiPaths.clientVersion} (iPadOS; MuyuFlutter)';
+    _client.userAgent =
+        '${HuaweiPaths.packageName}/${HuaweiPaths.clientVersion} (iPadOS; MuyuFlutter)';
   }
 
   final HttpClient _client;
@@ -74,24 +80,27 @@ class HuaweiGateway {
 
   /// Digest 鉴权头。token 为空时用于 loginex（无会话调用）。
   String digestHeader([String? token]) {
-    final created = '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
-    final buf = StringBuffer('Digest username=app-music-baseline, nonce=${_nonce()}, created=$created');
+    final created =
+        '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
+    final buf = StringBuffer(
+      'Digest username=app-music-baseline, nonce=${_nonce()}, created=$created',
+    );
     final t = token ?? session?.token;
     if (t != null && t.isNotEmpty) buf.write(', token=$t');
     return buf.toString();
   }
 
   Map<String, String> headers([String? tokenOverride]) => <String, String>{
-        // 运行时取证（Muyu 2.0.4 实际 HTTP/1.1 请求）：
-        // Host / User-Agent=设备串 / Accept / Authorization / Content-Type /
-        // Accept-Encoding。没有 x-client-version、x-deviceid 等头。
-        // 多余的 x-* 头会让华为网关返回 990000。
-        'User-Agent': HuaweiPaths.deviceContext,
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip',
-        'Content-Type': 'application/json;charset=UTF-8',
-        'Authorization': digestHeader(tokenOverride),
-      };
+    // 运行时取证（Muyu 2.0.4 实际 HTTP/1.1 请求）：
+    // Host / User-Agent=设备串 / Accept / Authorization / Content-Type /
+    // Accept-Encoding。没有 x-client-version、x-deviceid 等头。
+    // 多余的 x-* 头会让华为网关返回 990000。
+    'User-Agent': HuaweiPaths.deviceContext,
+    'Accept': 'application/json',
+    'Accept-Encoding': 'gzip',
+    'Content-Type': 'application/json;charset=UTF-8',
+    'Authorization': digestHeader(tokenOverride),
+  };
 
   Uri makeUrl(String path) {
     if (path.startsWith('http://') || path.startsWith('https://')) {
@@ -119,9 +128,10 @@ class HuaweiGateway {
       tokenOverride: '', // 无 token 的 Digest
     );
     final json = _decodeJson(raw, HuaweiPaths.loginEx);
-    final token = firstString(json, const ['token']) ??
-        _findDeep(json, const ['token']);
-    final userId = firstString(json, const ['snsUserID', 'snsUserId']) ??
+    final token =
+        firstString(json, const ['token']) ?? _findDeep(json, const ['token']);
+    final userId =
+        firstString(json, const ['snsUserID', 'snsUserId']) ??
         _findDeep(json, const ['snsUserID', 'snsUserId']);
     if (token == null || userId == null) {
       throw const HuaweiException('音乐会话不完整：缺少 token 或 snsUserID');
@@ -137,23 +147,65 @@ class HuaweiGateway {
     return s;
   }
 
+  /// 华为账号 OAuth userinfo（需要授权时的 openid + profile scope）。
+  /// 返回 nickname / picture 等资料；scope 不含 profile 时可能只有 sub。
+  Future<Map<String, dynamic>> accountUserInfo(String accessToken) async {
+    final req = await _client.getUrl(
+      Uri.https(HuaweiPaths.tokenHost, HuaweiPaths.userInfoPath),
+    );
+    req.headers.set('Authorization', 'Bearer $accessToken');
+    req.headers.set('Accept', 'application/json');
+    req.headers.set('User-Agent', HuaweiPaths.deviceContext);
+    final resp = await req.close();
+    final body = await resp.transform(utf8.decoder).join();
+    if (resp.statusCode == 401) {
+      throw const HuaweiException('账号资料授权已过期', statusCode: 401);
+    }
+    if (resp.statusCode < 200 || resp.statusCode >= 300 || body.isEmpty) {
+      throw HuaweiException('账号资料请求失败（HTTP ${resp.statusCode}）');
+    }
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const HuaweiException('账号资料响应格式异常');
+    }
+    return decoded;
+  }
+
+  /// 音乐侧账号资料：优先 GET，部分网关版本只接受 POST，因此两种都试一次。
+  /// 失败时返回 null，由调用方保留已有资料，不影响登录和业务请求。
+  Future<Map<String, dynamic>?> musicUserInfo() async {
+    if (session == null) return null;
+    for (final method in const <String>['GET', 'POST']) {
+      try {
+        final raw = await _send(
+          makeUrl(HuaweiPaths.musicUserInfo),
+          method,
+          const <String, dynamic>{},
+        );
+        final json = _decode(raw, HuaweiPaths.musicUserInfo);
+        if (json.isNotEmpty) return json;
+      } on HuaweiException {
+        // 404/405 或业务码不兼容时换下一种方法；两种都失败就回退已有资料。
+      }
+    }
+    return null;
+  }
+
   /// 业务 POST（源码事实：所有业务接口用 POST/JSON）。
   /// 音乐 token 失效时，用仍有效的账号 access token 自动换一次会话。
   Future<Map<String, dynamic>> request(
     String path, {
     Map<String, dynamic> body = const <String, dynamic>{},
-  }) =>
-      _withSessionRetry(() async {
-        final raw = await _send(makeUrl(path), 'POST', body);
-        return _decode(raw, path);
-      });
+  }) => _withSessionRetry(() async {
+    final raw = await _send(makeUrl(path), 'POST', body);
+    return _decode(raw, path);
+  });
 
   /// GET（仅用于带 query 且源码明确 GET 的接口，如 favorite/exist、playlist/detail）。
-  Future<Map<String, dynamic>> get(String path) =>
-      _withSessionRetry(() async {
-        final raw = await _send(makeUrl(path), 'GET', const <String, dynamic>{});
-        return _decode(raw, path);
-      });
+  Future<Map<String, dynamic>> get(String path) => _withSessionRetry(() async {
+    final raw = await _send(makeUrl(path), 'GET', const <String, dynamic>{});
+    return _decode(raw, path);
+  });
 
   Future<T> _withSessionRetry<T>(Future<T> Function() work) async {
     try {
@@ -188,8 +240,11 @@ class HuaweiGateway {
   bool _safeResource(Uri url) {
     if (url.scheme != 'https') return false;
     final host = url.host.toLowerCase();
-    return const ['.dbankcdn.cn', '.tingmall.com', '.kuke.com']
-        .any((s) => host.endsWith(s) && host.length > s.length);
+    return const [
+      '.dbankcdn.cn',
+      '.tingmall.com',
+      '.kuke.com',
+    ].any((s) => host.endsWith(s) && host.length > s.length);
   }
 
   Future<_RawResponse> _send(
@@ -207,14 +262,31 @@ class HuaweiGateway {
       h.forEach((k, v) => req.headers.set(k, v));
       if (method == 'POST') {
         if (form) {
-          req.headers.contentType = ContentType.parse('application/x-www-form-urlencoded');
+          req.headers.contentType = ContentType.parse(
+            'application/x-www-form-urlencoded',
+          );
         } else {
-          req.headers.contentType = ContentType.parse('application/json;charset=UTF-8');
+          req.headers.contentType = ContentType.parse(
+            'application/json;charset=UTF-8',
+          );
         }
-        req.write(form ? body.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value.toString())}').join('&') : jsonEncode(body));
+        req.write(
+          form
+              ? body.entries
+                    .map(
+                      (e) =>
+                          '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value.toString())}',
+                    )
+                    .join('&')
+              : jsonEncode(body),
+        );
       }
       final resp = await req.close();
       final text = await resp.transform(utf8.decoder).join();
+      AppLog.add(
+        'http',
+        '$method ${url.path} -> ${resp.statusCode} ${text.length}B',
+      );
       return _RawResponse(resp.statusCode, text);
     } on HuaweiException {
       rethrow;
@@ -257,18 +329,30 @@ class HuaweiGateway {
       throw const HuaweiException('登录已失效，请重新登录华为账号', statusCode: 401);
     }
     if (raw.body.isEmpty) {
-      throw HuaweiException('$path 返回空响应（HTTP ${raw.statusCode}）', statusCode: raw.statusCode);
+      throw HuaweiException(
+        '$path 返回空响应（HTTP ${raw.statusCode}）',
+        statusCode: raw.statusCode,
+      );
     }
     try {
       final decoded = jsonDecode(raw.body);
-      if (decoded is! Map<String, dynamic>) throw const HuaweiException('服务响应格式异常');
+      if (decoded is! Map<String, dynamic>) {
+        throw const HuaweiException('服务响应格式异常');
+      }
       // 业务码：源码事实 result.resultCode == 000000；
       // OAuth token 端点无 result 信封，直接返回 access_token。
       final result = decoded['result'];
       if (result is Map) {
-        final code = firstString(Map<String, dynamic>.from(result), const ['resultCode']);
-        final msg = firstString(Map<String, dynamic>.from(result), const ['resultMessage']) ?? '';
+        final code = firstString(Map<String, dynamic>.from(result), const [
+          'resultCode',
+        ]);
+        final msg =
+            firstString(Map<String, dynamic>.from(result), const [
+              'resultMessage',
+            ]) ??
+            '';
         if (code != null && code != HuaweiPaths.successCode) {
+          AppLog.add('api', '$path -> $code ${msg.isEmpty ? '' : msg}');
           if (code == '142400') {
             throw const HuaweiException('该歌曲当前不可播放（无版权 / 已下架 / 会员限制）');
           }
@@ -289,7 +373,10 @@ class HuaweiGateway {
         }
       }
       if (raw.statusCode < 200 || raw.statusCode >= 300) {
-        throw HuaweiException('$path 阶段返回 HTTP ${raw.statusCode}', statusCode: raw.statusCode);
+        throw HuaweiException(
+          '$path 阶段返回 HTTP ${raw.statusCode}',
+          statusCode: raw.statusCode,
+        );
       }
       return decoded;
     } on HuaweiException {
@@ -299,7 +386,8 @@ class HuaweiGateway {
     }
   }
 
-  Map<String, dynamic> _decode(_RawResponse raw, String path) => _decodeJson(raw, path);
+  Map<String, dynamic> _decode(_RawResponse raw, String path) =>
+      _decodeJson(raw, path);
 
   static String? firstString(Map<String, dynamic> d, List<String> keys) {
     for (final k in keys) {
@@ -339,22 +427,44 @@ class HuaweiGateway {
     return Uri.tryParse('https:${s.startsWith('//') ? '' : '//'}$s');
   }
 
-  static String? _findDeep(dynamic root, List<String> keys) {
-    if (root is Map<String, dynamic>) {
-      final direct = firstString(root, keys);
+  /// 在嵌套响应里找第一个非空字符串（华为资料常包在 data/profile 下）。
+  static String? findDeepString(dynamic root, List<String> keys) {
+    if (root is Map) {
+      final direct = firstString(Map<String, dynamic>.from(root), keys);
       if (direct != null) return direct;
       for (final v in root.values) {
-        final found = _findDeep(v, keys);
+        final found = findDeepString(v, keys);
         if (found != null) return found;
       }
     } else if (root is List) {
       for (final v in root) {
-        final found = _findDeep(v, keys);
+        final found = findDeepString(v, keys);
         if (found != null) return found;
       }
     }
     return null;
   }
+
+  /// 在嵌套响应里找第一个可解析 URL。
+  static Uri? findDeepUrl(dynamic root, List<String> keys) {
+    if (root is Map) {
+      final direct = firstUrl(Map<String, dynamic>.from(root), keys);
+      if (direct != null) return direct;
+      for (final v in root.values) {
+        final found = findDeepUrl(v, keys);
+        if (found != null) return found;
+      }
+    } else if (root is List) {
+      for (final v in root) {
+        final found = findDeepUrl(v, keys);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  static String? _findDeep(dynamic root, List<String> keys) =>
+      findDeepString(root, keys);
 
   void dispose() => _client.close();
 }

@@ -44,7 +44,7 @@ class OAuthAttempt {
           'redirect_uri': HuaweiPaths.redirectUri,
           'response_type': 'code',
           'access_type': 'offline',
-          'scope': 'openid',
+          'scope': 'openid profile',
           'state': state,
           'code_challenge': challenge,
           'code_challenge_method': 'S256',

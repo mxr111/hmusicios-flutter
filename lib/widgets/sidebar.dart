@@ -12,17 +12,20 @@ class Sidebar extends StatelessWidget {
     required this.state,
     required this.onSettings,
     this.onLocalMusic,
+    this.onAccount,
   });
 
   final AppState state;
   final VoidCallback onSettings;
   final VoidCallback? onLocalMusic;
+  final VoidCallback? onAccount;
 
   @override
   Widget build(BuildContext context) {
+    final pal = state.palette;
     return Container(
       width: MuyuDims.sidebarWidth,
-      color: MuyuColors.sidebar,
+      color: pal.surface,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -53,68 +56,121 @@ class Sidebar extends StatelessWidget {
   }
 
   Widget _userHeader() {
-    final name = state.isLoggedIn ? state.accountName : '土豆';
+    final pal = state.palette;
+    final loggedIn = state.isLoggedIn;
+    final name = loggedIn ? state.accountName : '登录华为音乐';
+    final avatar = state.accountAvatar;
+    final member = state.accountMemberLabel;
+    final subtitle =
+        loggedIn ? (member.isNotEmpty ? member : '华为音乐账号') : '点击登录华为账号';
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: [Color(0xFFF7DFC7), Color(0xFFC28C65)],
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Tooltip(
+        message: loggedIn ? '账号与切换' : '登录华为音乐',
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onAccount,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+              child: Row(
+                children: [
+                  if (avatar.isEmpty)
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: pal.accent.withValues(alpha: 0.14),
+                      ),
+                      child: Icon(
+                        Icons.person_outline,
+                        size: 20,
+                        color: pal.accent,
+                      ),
+                    )
+                  else
+                    CoverArt(
+                      url: Uri.tryParse(avatar),
+                      size: 36,
+                      circle: true,
+                      seed: 5,
+                    ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: pal.text,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 1,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: loggedIn && state.api.isMember
+                                      ? MuyuColors.vip.withValues(alpha: 0.18)
+                                      : pal.accent.withValues(alpha: 0.10),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: loggedIn && state.api.isMember
+                                        ? MuyuColors.vip
+                                        : pal.muted,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            if (loggedIn && state.api.isMember)
+                              const Icon(
+                                Icons.verified,
+                                size: 11,
+                                color: MuyuColors.accent,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: const Icon(Icons.face, size: 20, color: Colors.white),
           ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: MuyuColors.ink)),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: MuyuColors.vip.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: const Text('Lv.6',
-                          style: TextStyle(
-                              fontSize: 9,
-                              color: MuyuColors.vip,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.verified, size: 11, color: MuyuColors.accent),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _item(int index, IconData icon, String label) {
     final selected = state.tab == index;
+    final pal = state.palette;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       child: Material(
-        color: selected ? MuyuColors.sidebarSelected : Colors.transparent,
+        color:
+            selected ? pal.accent.withValues(alpha: 0.14) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
@@ -126,21 +182,20 @@ class Sidebar extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               border: selected
                   ? const Border(
-                      left: BorderSide(color: MuyuColors.accent, width: 3))
+                      left: BorderSide(color: MuyuColors.accent, width: 3),
+                    )
                   : null,
             ),
             child: Row(
               children: [
-                Icon(icon,
-                    size: 17,
-                    color: selected ? MuyuColors.accent : MuyuColors.inkMuted),
+                Icon(icon, size: 17, color: selected ? pal.accent : pal.muted),
                 const SizedBox(width: 11),
                 Text(
                   label,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected ? MuyuColors.accent : MuyuColors.ink,
+                    color: selected ? pal.accent : pal.text,
                   ),
                 ),
               ],
@@ -156,8 +211,10 @@ class Sidebar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 18),
       child: Row(
         children: [
-          const Text('自定义入口',
-              style: TextStyle(fontSize: 11, color: MuyuColors.inkMuted)),
+          const Text(
+            '自定义入口',
+            style: TextStyle(fontSize: 11, color: MuyuColors.inkMuted),
+          ),
           const Spacer(),
           SizedBox(
             width: 24,
@@ -166,9 +223,9 @@ class Sidebar extends StatelessWidget {
               padding: EdgeInsets.zero,
               icon: const Icon(Icons.add, size: 15, color: MuyuColors.inkMuted),
               onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('自定义入口将在后续版本开放')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('自定义入口将在后续版本开放')));
               },
             ),
           ),
@@ -178,6 +235,7 @@ class Sidebar extends StatelessWidget {
   }
 
   Widget _localMusic() {
+    final pal = state.palette;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: InkWell(
@@ -187,23 +245,22 @@ class Sidebar extends StatelessWidget {
           height: 36,
           padding: const EdgeInsets.only(left: 10),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: pal.surface.withValues(alpha: 0.9),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             children: [
-              const Icon(Icons.folder_open_outlined,
-                  size: 16, color: MuyuColors.inkMuted),
+              Icon(Icons.folder_open_outlined, size: 16, color: pal.muted),
               const SizedBox(width: 11),
-              const Text('本地音乐',
-                  style: TextStyle(fontSize: 12, color: MuyuColors.inkMuted)),
+              Text('本地音乐', style: TextStyle(fontSize: 12, color: pal.muted)),
               const Spacer(),
               if (state.local.songs.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: Text('${state.local.songs.length}',
-                      style: const TextStyle(
-                          fontSize: 11, color: MuyuColors.inkMuted)),
+                  child: Text(
+                    '${state.local.songs.length}',
+                    style: TextStyle(fontSize: 11, color: pal.muted),
+                  ),
                 ),
             ],
           ),

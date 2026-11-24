@@ -26,6 +26,15 @@
 > - 设置页加 Scaffold/AppBar，避免裸 ListView 路由造成的卡死。
 > - 酷狗 / QQ 协议见 `rea_evidence/PROVIDER_PROTOCOL_EVIDENCE.md`；签名算法来自公开协议，标注「待真机验证」。
 
+> 🟠 **v6（2026-11-24）**：真实账号、日志与播放稳定性。
+> - 左上角账号改为真实华为账号：OAuth userinfo 读取昵称/头像，老会话再用音乐侧 `userinfo` 兜底；会员名称来自订阅接口。未登录时显示「登录华为音乐」，点击直接打开登录面板，不再显示「土豆」占位。
+> - 「我的」页同步使用真实头像/昵称与主题色。
+> - 设置页新增「导出日志」，并开启 iOS 文件共享；日志覆盖 HTTP、取流、LeaseProxy、歌词和播放错误。
+> - 深/浅色开关改为真正的浅↔深切换；侧栏、播放条、歌曲行、主页、设置页使用主题配色。
+> - 首页刷新改为对真实数据做确定性轮换（服务端同账号推荐不刷新）。
+> - 搜索/榜单播放：MP3 兜底、设备 UA、CDN MIME 修正、LeaseProxy 保留最近 4 条租约；不可播时明确提示并自动跳过。
+> - 歌词：从 `lyricAddres` / `lyrics` / `contentExInfo` 递归抓取 HMRC/LRC 地址。
+
 > 🔴 **v2 重大修正（2026-11-23）**：REA 反编译拿不到函数伪代码（本机无 Ghidra/IDA/Hopper/Kuna 引擎），但找到了同源项目 tinglan 的源码，纠正了此前两个致命错误：
 > 1. **鉴权不是 Bearer**，而是 `Authorization: Digest username=app-music-baseline, nonce=<随机>, created=<UTC>, token=<music token>`；且需三段式：OAuth 授权（域名 `oauth-login.platform.hicloud.com`）→ 换账号 AT → `loginex` 换音乐 token + snsUserID。这解释了此前真机接口不通的根因。
 > 2. **取流 qualityType 是 "1"(MP3)/"3"(FLAC)**，不是 h/sq/hr；主音频用顶层 `fileURL`。

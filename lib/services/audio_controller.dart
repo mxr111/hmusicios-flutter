@@ -9,6 +9,7 @@ import '../protocol/huawei_api.dart';
 import '../protocol/kugou_api.dart';
 import '../protocol/netease_api.dart';
 import '../protocol/qq_api.dart';
+import 'app_log.dart';
 import 'lease_proxy.dart';
 
 /// 与沐语 MyGo audio.Player 对等：取流 → 租约代理 → 播放器。
@@ -138,14 +139,18 @@ class MuyuAudioController extends ChangeNotifier {
         (f) => f.quality == wanted,
         orElse: () => files.first,
       );
-      // 切歌前撤销旧租约，避免旧签名 URL 被复用
-      LeaseProxy.instance.revoke();
+      AppLog.add(
+        'play',
+        '${song.name} [${song.id}] ${chosen.quality.name} '
+        '${chosen.url.scheme}://${chosen.url.host}${chosen.url.path}',
+      );
       final local = await LeaseProxy.instance.publish(chosen.url);
       await _player.stop();
       await _player.setVolume(volume);
       await _player.play(UrlSource(local.toString()));
     } catch (e) {
       error = e.toString();
+      AppLog.add('play', 'error ${song.name} [${song.id}]: $e');
       notifyListeners();
     }
   }

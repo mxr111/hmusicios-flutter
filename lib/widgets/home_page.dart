@@ -147,6 +147,11 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(width: 16),
               Flexible(child: SourceSwitcher(state: state)),
               const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 20),
+                tooltip: '换一批',
+                onPressed: state.refreshHome,
+              ),
               OutlinedButton.icon(
                 onPressed: () {
                   state.selectTab(1);
@@ -216,11 +221,14 @@ class _HomePageState extends State<HomePage> {
     VoidCallback? onNext,
     String? nextTooltip,
   }) {
+    final pal = widget.state.palette;
     return Row(
       children: [
-        Text(title, style: MuyuTheme.section),
+        Text(title,
+            style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: pal.text)),
         const Spacer(),
-        Text(trailing, style: MuyuTheme.muted),
+        Text(trailing, style: TextStyle(fontSize: 12, color: pal.muted)),
         if (onPrevious != null)
           TinyIconButton(icon: Icons.chevron_left, onTap: onPrevious),
         if (onNext != null)
@@ -269,10 +277,10 @@ class _HomePageState extends State<HomePage> {
                 playlist.name.isEmpty ? '未命名歌单' : playlist.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: MuyuColors.ink),
+                    color: widget.state.palette.text),
               ),
               if (playlist.songCount > 0)
                 Text('${playlist.songCount} 首', style: MuyuTheme.muted),

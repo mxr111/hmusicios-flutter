@@ -37,6 +37,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hmusic 通过本机回环地址转发音频流，实现可撤销的播放租约；不会访问局域网内其他设备。</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

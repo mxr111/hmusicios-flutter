@@ -235,6 +235,9 @@ class SongRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = theme.colorScheme.onSurface;
+    final muted = theme.colorScheme.onSurfaceVariant;
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: onPlay,
@@ -251,10 +254,10 @@ class SongRow extends StatelessWidget {
                   Text(song.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: MuyuColors.ink)),
+                          color: fg)),
                   const SizedBox(height: 3),
                   GestureDetector(
                     onTap: onArtistTap,
@@ -267,7 +270,7 @@ class SongRow extends StatelessWidget {
                           child: Text(song.artistText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: MuyuTheme.muted),
+                              style: TextStyle(fontSize: 12, color: muted)),
                         ),
                       ],
                     ),

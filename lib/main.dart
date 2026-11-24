@@ -97,6 +97,7 @@ class AppShell extends StatelessWidget {
               state: state,
               onSettings: () => _openSettings(context),
               onLocalMusic: () => _openLocalMusic(context),
+              onAccount: () => _login(context),
             ),
           Expanded(child: _content(context)),
         ],
@@ -111,14 +112,22 @@ class AppShell extends StatelessWidget {
               unselectedItemColor: MuyuColors.inkMuted,
               items: const <BottomNavigationBarItem>[
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.home_outlined), label: '主页'),
+                  icon: Icon(Icons.home_outlined),
+                  label: '主页',
+                ),
                 BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.music_note_outlined), label: '音乐厅'),
+                  icon: Icon(Icons.music_note_outlined),
+                  label: '音乐厅',
+                ),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.album_outlined), label: '唱片架'),
+                  icon: Icon(Icons.album_outlined),
+                  label: '唱片架',
+                ),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.person_outline), label: '我的'),
+                  icon: Icon(Icons.person_outline),
+                  label: '我的',
+                ),
               ],
             ),
     );
@@ -189,19 +198,15 @@ class AppShell extends StatelessWidget {
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => SettingsPage(
-          state: state,
-          onLogin: () => _login(context),
-        ),
+        builder: (_) =>
+            SettingsPage(state: state, onLogin: () => _login(context)),
       ),
     );
   }
 
   void _openLocalMusic(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => LocalMusicPage(state: state),
-      ),
+      MaterialPageRoute<void>(builder: (_) => LocalMusicPage(state: state)),
     );
   }
 }

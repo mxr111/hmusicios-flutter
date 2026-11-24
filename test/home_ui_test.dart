@@ -4,11 +4,13 @@ import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/pages/secondary_pages.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/services/app_state.dart';
+import 'package:muyu_flutter/services/session_store.dart';
 import 'package:muyu_flutter/theme.dart';
 import 'package:muyu_flutter/widgets/common.dart';
 import 'package:muyu_flutter/widgets/discover_page.dart';
 import 'package:muyu_flutter/widgets/home_page.dart';
 import 'package:muyu_flutter/widgets/player_bar.dart';
+import 'package:muyu_flutter/widgets/sidebar.dart';
 
 void main() {
   testWidgets('首页卡片和推荐列表使用真实字段（不再写死歌名）', (tester) async {
@@ -32,10 +34,12 @@ void main() {
     );
 
     await tester.binding.setSurfaceSize(const Size(1460, 980));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: HomePage(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
     await tester.pump();
 
     expect(find.byType(HomeCard), findsNWidgets(5));
@@ -50,11 +54,7 @@ void main() {
 
   testWidgets('iPhone 窄屏主页不溢出，底部仍显示推荐歌单', (tester) async {
     final state = AppState();
-    final song = Song(
-      id: 's1',
-      name: '晴天',
-      artists: const <String>['周杰伦'],
-    );
+    final song = Song(id: 's1', name: '晴天', artists: const <String>['周杰伦']);
     state.homeSongs = <Song>[song];
     state.discover = DiscoverData(
       newSongs: <Song>[song],
@@ -65,10 +65,12 @@ void main() {
       ],
     );
     await tester.binding.setSurfaceSize(const Size(390, 844));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: HomePage(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
     await tester.pump();
 
     expect(tester.takeException(), isNull);
@@ -86,10 +88,12 @@ void main() {
       durationMs: 269000,
     );
     await tester.binding.setSurfaceSize(const Size(1200, 800));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: PlayerBar(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: PlayerBar(state: state)),
+      ),
+    );
 
     await tester.tap(find.byType(VinylCover).first);
     await tester.pump(const Duration(milliseconds: 200));
@@ -118,10 +122,12 @@ void main() {
       ],
     );
     await tester.binding.setSurfaceSize(const Size(1200, 900));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: DiscoverPage(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: DiscoverPage(state: state)),
+      ),
+    );
     await tester.pump();
 
     expect(find.text('华为音乐榜单'), findsOneWidget);
@@ -139,16 +145,55 @@ void main() {
   testWidgets('设置页可打开且不会因布局卡死', (tester) async {
     final state = AppState();
     await tester.binding.setSurfaceSize(const Size(390, 844));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: SettingsPage(state: state, onLogin: () {}),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: SettingsPage(state: state, onLogin: () {}),
+      ),
+    );
     await tester.pump();
 
     expect(tester.takeException(), isNull);
     expect(find.text('设置'), findsOneWidget);
     expect(find.text('默认音质'), findsOneWidget);
     expect(find.text('皮肤与外观'), findsOneWidget);
+    state.dispose();
+  });
+
+  testWidgets('深色开关在浅色/深色主题之间切换，不循环 12 套主题', (tester) async {
+    final state = AppState(sessionStore: MemorySessionStore());
+    expect(state.darkMode, isFalse);
+
+    state.toggleDarkMode();
+    expect(state.darkMode, isTrue);
+
+    state.toggleDarkMode();
+    expect(state.darkMode, isFalse);
+    state.dispose();
+  });
+
+  testWidgets('左上角账号未登录时显示真实登录入口并可点击', (tester) async {
+    final state = AppState(sessionStore: MemorySessionStore());
+    var tapped = 0;
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(
+          body: Sidebar(
+            state: state,
+            onSettings: () {},
+            onAccount: () => tapped++,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('登录华为音乐'), findsOneWidget);
+    expect(find.text('土豆'), findsNothing);
+    await tester.tap(find.text('登录华为音乐'));
+    expect(tapped, 1);
     state.dispose();
   });
 }

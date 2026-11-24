@@ -23,6 +23,7 @@ class PlayerBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final audio = state.audio;
+    final pal = state.palette;
     final song = audio.current ?? _placeholder;
     final hasTrack = audio.current != null;
     final total = hasTrack && audio.duration.inSeconds > 0
@@ -39,7 +40,7 @@ class PlayerBar extends StatelessWidget {
       child: Container(
         height: MuyuDims.playerBarHeight,
         decoration: BoxDecoration(
-        color: Colors.white,
+        color: pal.surface,
         borderRadius: BorderRadius.circular(36),
         boxShadow: [
           BoxShadow(
@@ -67,17 +68,17 @@ class PlayerBar extends StatelessWidget {
                       Text(song.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: MuyuColors.ink)),
+                              color: pal.text)),
                       const SizedBox(height: 4),
                       Row(
                         children: [
                           Text(song.artistText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: MuyuTheme.muted),
+                              style: TextStyle(fontSize: 12, color: pal.muted)),
                           const SizedBox(width: 6),
                           const SourceBadge(compact: true),
                           const SizedBox(width: 5),
@@ -101,7 +102,8 @@ class PlayerBar extends StatelessWidget {
                           : currentSeconds;
                       return Row(
                         children: [
-                          Text(_fmt(seconds), style: MuyuTheme.muted),
+                          Text(_fmt(seconds),
+                              style: TextStyle(fontSize: 12, color: pal.muted)),
                           Expanded(
                             child: Slider(
                               value: seconds,
@@ -117,7 +119,7 @@ class PlayerBar extends StatelessWidget {
                             hasTrack && audio.duration.inSeconds > 0
                                 ? _fmt(total)
                                 : '0:00',
-                            style: MuyuTheme.muted,
+                            style: TextStyle(fontSize: 12, color: pal.muted),
                           ),
                         ],
                       );

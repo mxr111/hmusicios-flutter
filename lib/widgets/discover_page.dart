@@ -74,7 +74,7 @@ class DiscoverPage extends StatelessWidget {
         IconButton(
           icon: const Icon(Icons.refresh),
           tooltip: '刷新榜单',
-          onPressed: state.loadHome,
+          onPressed: state.refreshHome,
         ),
         IconButton(
           icon: Icon(Icons.search, color: pal.text),
@@ -206,7 +206,7 @@ class DiscoverPage extends StatelessWidget {
 
   Widget _empty(String message, MuyuPalette pal) {
     return InkWell(
-      onTap: state.loadHome,
+      onTap: state.refreshHome,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         height: 96,

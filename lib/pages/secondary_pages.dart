@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../models.dart';
 import '../models_skin.dart';
+import '../services/app_log.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -63,7 +67,10 @@ class _SearchPageState extends State<SearchPage> {
           if (state.loading)
             const LinearProgressIndicator(minHeight: 2)
           else if (state.error != null)
-            StatePanel(message: state.error!, onRetry: () => state.doSearch(_controller.text))
+            StatePanel(
+              message: state.error!,
+              onRetry: () => state.doSearch(_controller.text),
+            )
           else if (state.searchResults.isEmpty &&
               state.searchArtists.isEmpty &&
               state.searchAlbums.isEmpty)
@@ -123,8 +130,8 @@ class _SearchPageState extends State<SearchPage> {
       itemBuilder: (context, i) => SongRow(
         song: state.searchResults[i],
         index: i,
-        onPlay: () => state.play(state.searchResults[i],
-            queue: state.searchResults),
+        onPlay: () =>
+            state.play(state.searchResults[i], queue: state.searchResults),
         onFavorite: () => state.toggleFavorite(state.searchResults[i]),
         onArtistTap: () => state.openArtistFromSong(state.searchResults[i]),
       ),
@@ -146,10 +153,12 @@ class _SearchPageState extends State<SearchPage> {
           title: Text(artist.name, style: MuyuTheme.body),
           subtitle: artist.desc.isEmpty
               ? null
-              : Text(artist.desc,
+              : Text(
+                  artist.desc,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: MuyuTheme.muted),
+                  style: MuyuTheme.muted,
+                ),
           trailing: const Icon(Icons.chevron_right, size: 18),
           onTap: () => state.openArtist(artist.id, name: artist.name),
         );
@@ -187,11 +196,15 @@ class _SearchPageState extends State<SearchPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(album.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(
+                album.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               Text('${album.songCount} 首', style: MuyuTheme.muted),
             ],
           ),
@@ -269,8 +282,11 @@ class ShelfPage extends StatelessWidget {
                                       : MuyuColors.cardHot,
                                 ),
                               ),
-                              child: const Icon(Icons.album,
-                                  size: 40, color: Colors.white),
+                              child: const Icon(
+                                Icons.album,
+                                size: 40,
+                                color: Colors.white,
+                              ),
                             )
                           : Image.network(
                               p.cover.toString(),
@@ -283,11 +299,15 @@ class ShelfPage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text(p.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text(
+                    p.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   Text('${p.songCount} 首', style: MuyuTheme.muted),
                 ],
               ),
@@ -310,7 +330,10 @@ class ShelfPage extends StatelessWidget {
           decoration: const InputDecoration(hintText: '歌单名称'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () {
               final name = controller.text.trim();
@@ -343,6 +366,8 @@ class MinePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final favs = state.favorites;
+    final pal = state.palette;
+    final avatar = state.accountAvatar;
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
       children: [
@@ -351,21 +376,32 @@ class MinePage extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: pal.surface,
             borderRadius: BorderRadius.circular(14),
           ),
           child: Row(
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                      colors: [Color(0xFFF7DFC7), Color(0xFFC28C65)]),
+              if (avatar.isEmpty)
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: pal.accent.withValues(alpha: 0.14),
+                  ),
+                  child: Icon(
+                    Icons.person_outline,
+                    color: pal.accent,
+                    size: 26,
+                  ),
+                )
+              else
+                CoverArt(
+                  url: Uri.tryParse(avatar),
+                  size: 48,
+                  circle: true,
+                  seed: 5,
                 ),
-                child: const Icon(Icons.person, color: Colors.white),
-              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -373,13 +409,18 @@ class MinePage extends StatelessWidget {
                   children: [
                     Text(
                       state.accountName,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: pal.text,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       state.isLoggedIn
-                          ? '已连接${state.source.label}'
+                          ? (state.accountMemberLabel.isNotEmpty
+                                ? '${state.source.label} · ${state.accountMemberLabel}'
+                                : '已连接 ${state.source.label}')
                           : '登录后可同步收藏与歌单',
                       style: MuyuTheme.muted,
                     ),
@@ -469,11 +510,14 @@ class MinePage extends StatelessWidget {
                             child: Icon(src.icon, size: 48, color: src.color),
                           ),
                         )
-                      : Image.network(cover.toString(), fit: BoxFit.cover,
+                      : Image.network(
+                          cover.toString(),
+                          fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => Container(
                             color: src.color.withValues(alpha: 0.16),
                             child: Icon(src.icon, size: 48, color: src.color),
-                          )),
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -493,7 +537,10 @@ class MinePage extends StatelessWidget {
   }
 
   Widget _filteredFavorites(
-      BuildContext context, List<Song> favs, MusicSourceLabel source) {
+    BuildContext context,
+    List<Song> favs,
+    MusicSourceLabel source,
+  ) {
     return _FavoriteList(
       songs: favs.where((s) => s.source == source).toList(),
       source: source,
@@ -511,104 +558,172 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final pal = state.palette;
     return Scaffold(
-      backgroundColor: MuyuColors.background,
+      backgroundColor: pal.base,
       appBar: AppBar(
-        title: const Text('设置'),
+        title: Text('设置', style: TextStyle(color: pal.text)),
         backgroundColor: Colors.transparent,
-        foregroundColor: MuyuColors.ink,
+        foregroundColor: pal.text,
         elevation: 0,
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
         children: [
-        _card(
-          '默认音质',
-          DropdownButton<AudioQuality>(
-            value: state.audio.quality,
-            underline: const SizedBox.shrink(),
-            items: AudioQuality.values
-                .map((q) => DropdownMenuItem<AudioQuality>(
-                    value: q, child: Text(q.label)))
-                .toList(),
-            onChanged: (q) {
-              if (q != null) state.audio.setQuality(q);
-            },
-          ),
-        ),
-        _card(
-          '深色主题',
-          Switch(
-            value: state.darkMode,
-            onChanged: (_) => state.toggleTheme(),
-          ),
-        ),
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          leading: const Icon(Icons.palette_outlined),
-          title: const Text('皮肤与外观', style: MuyuTheme.body),
-          subtitle: Text('主题 · 歌词样式 · 沉浸光感',
-              style: MuyuTheme.muted),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => AppearancePage(state: state),
+          _card(
+            '默认音质',
+            DropdownButton<AudioQuality>(
+              value: state.audio.quality,
+              underline: const SizedBox.shrink(),
+              items: AudioQuality.values
+                  .map(
+                    (q) => DropdownMenuItem<AudioQuality>(
+                      value: q,
+                      child: Text(q.label),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (q) {
+                if (q != null) state.audio.setQuality(q);
+              },
             ),
           ),
-        ),
-        _card(
-          '华为账号',
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(state.isLoggedIn ? '已登录' : '未登录',
-                  style: MuyuTheme.muted),
-              const SizedBox(width: 12),
-              FilledButton(
-                onPressed: onLogin,
-                child: Text(state.isLoggedIn ? '切换账号' : '登录'),
-              ),
-            ],
+          _card(
+            '深色主题',
+            Switch(
+              value: state.darkMode,
+              onChanged: (_) => state.toggleDarkMode(),
+            ),
           ),
-        ),
-        const SizedBox(height: 18),
-        const Text('关于', style: MuyuTheme.section),
-        const SizedBox(height: 8),
-        const StatePanel(
-          message: '本工程由 REA 对沐语 v1.2.0 (Muyu.exe, Go 1.27.4) 全量反编译复刻，'
-              '仅实现华为音乐数据源。登录走内置浏览器 OAuth PKCE + loginex，'
-              '业务请求头为 Digest（app-music-baseline + music token）。'
-              '接口返回 401/403 时请重新扫码登录。',
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          '反编译事实：module muyu.local/desktop / 222 根模块 + 4 音源 / '
-          '私有网关 api-drcn.music.dbankcloud.cn / '
-          '发现页 columnInfoExs 三层结构 / 取流 qualityType 1(MP3)·3(FLAC) / '
-          '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
-          style: MuyuTheme.muted,
-        ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            leading: const Icon(Icons.palette_outlined),
+            title: Text(
+              '皮肤与外观',
+              style: TextStyle(fontSize: 13, color: pal.text),
+            ),
+            subtitle: Text(
+              '主题 · 歌词样式 · 沉浸光感',
+              style: TextStyle(fontSize: 12, color: pal.muted),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => AppearancePage(state: state),
+              ),
+            ),
+          ),
+          _card(
+            '华为账号',
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(state.isLoggedIn ? '已登录' : '未登录', style: MuyuTheme.muted),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: onLogin,
+                  child: Text(state.isLoggedIn ? '切换账号' : '登录'),
+                ),
+              ],
+            ),
+          ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            leading: const Icon(Icons.bug_report_outlined),
+            title: Text(
+              '导出日志',
+              style: TextStyle(fontSize: 13, color: pal.text),
+            ),
+            subtitle: Text(
+              '已记录 ${AppLog.length} 条 API / 播放 / 代理事件',
+              style: TextStyle(fontSize: 12, color: pal.muted),
+            ),
+            trailing: const Icon(Icons.download_outlined),
+            onTap: () => _exportLogs(context),
+          ),
+          const SizedBox(height: 18),
+          const Text('关于', style: MuyuTheme.section),
+          const SizedBox(height: 8),
+          const StatePanel(
+            message:
+                '本工程由 REA 对沐语 v1.2.0 (Muyu.exe, Go 1.27.4) 全量反编译复刻，'
+                '仅实现华为音乐数据源。登录走内置浏览器 OAuth PKCE + loginex，'
+                '业务请求头为 Digest（app-music-baseline + music token）。'
+                '接口返回 401/403 时请重新扫码登录。',
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '反编译事实：module muyu.local/desktop / 222 根模块 + 4 音源 / '
+            '私有网关 api-drcn.music.dbankcloud.cn / '
+            '发现页 columnInfoExs 三层结构 / 取流 qualityType 1(MP3)·3(FLAC) / '
+            '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
+            style: MuyuTheme.muted,
+          ),
         ],
       ),
     );
   }
 
   Widget _card(String label, Widget trailing) {
+    final pal = state.palette;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: pal.surface,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
-          Text(label, style: MuyuTheme.body),
+          Text(label, style: TextStyle(fontSize: 13, color: pal.text)),
           const Spacer(),
           trailing,
         ],
       ),
     );
+  }
+
+  Future<void> _exportLogs(BuildContext context) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-');
+      final file = File('${dir.path}/hmusic-log-$stamp.txt');
+      await file.writeAsString(AppLog.exportText(), flush: true);
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('日志已导出'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('文件路径：'),
+              const SizedBox(height: 6),
+              SelectableText(file.path),
+              const SizedBox(height: 10),
+              const Text(
+                '可在系统「文件」App 的 Hmusic 目录中找到，'
+                '或复制路径后用电脑导出。',
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('导出日志失败：$e')));
+    }
   }
 }
 
@@ -695,15 +810,14 @@ class _LoginSheetState extends State<LoginSheet> {
             ),
           ),
           const SizedBox(height: 10),
-          FilledButton(
-            onPressed: _apply,
-            child: const Text('使用音乐会话'),
-          ),
+          FilledButton(onPressed: _apply, child: const Text('使用音乐会话')),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),
-              child: Text(_error!,
-                  style: const TextStyle(color: MuyuColors.primary, fontSize: 12)),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: MuyuColors.primary, fontSize: 12),
+              ),
             ),
         ],
       ),
@@ -735,7 +849,6 @@ class _LoginSheetState extends State<LoginSheet> {
     widget.state.loadHome();
   }
 }
-
 
 /// 歌单详情：点击唱片架/发现页歌单卡片进入，真实歌曲列表。
 class PlaylistDetailPage extends StatelessWidget {
@@ -874,22 +987,28 @@ class AppearancePage extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: p.base,
                             borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(10)),
+                              top: Radius.circular(10),
+                            ),
                           ),
                           child: Row(
                             children: [
                               Expanded(
                                 child: Container(
-                                    margin: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: p.surface,
-                                      borderRadius: BorderRadius.circular(6),
+                                  margin: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: p.surface,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      'Aa',
+                                      style: TextStyle(
+                                        color: p.text,
+                                        fontSize: 18,
+                                      ),
                                     ),
-                                    child: Center(
-                                      child: Text('Aa',
-                                          style: TextStyle(
-                                              color: p.text, fontSize: 18)),
-                                    )),
+                                  ),
+                                ),
                               ),
                               Container(width: 8, color: p.accent),
                             ],
@@ -901,13 +1020,20 @@ class AppearancePage extends StatelessWidget {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(p.label,
-                                style: const TextStyle(
-                                    fontSize: 12, fontWeight: FontWeight.w600)),
+                            Text(
+                              p.label,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                             if (selected) ...[
                               const SizedBox(width: 4),
-                              const Icon(Icons.check_circle,
-                                  size: 13, color: MuyuColors.accent),
+                              const Icon(
+                                Icons.check_circle,
+                                size: 13,
+                                color: MuyuColors.accent,
+                              ),
                             ],
                           ],
                         ),
@@ -921,35 +1047,63 @@ class AppearancePage extends StatelessWidget {
           const SizedBox(height: 24),
           const Text('歌词样式', style: MuyuTheme.section),
           const SizedBox(height: 8),
-          _switchRow('歌词居中', Icons.format_align_center,
-              state.lyricStyle.align == LyricAlign.center, (v) {
-            state.updateLyricStyle(state.lyricStyle.copyWith(
-                align: v ? LyricAlign.center : LyricAlign.left));
-          }),
+          _switchRow(
+            '歌词居中',
+            Icons.format_align_center,
+            state.lyricStyle.align == LyricAlign.center,
+            (v) {
+              state.updateLyricStyle(
+                state.lyricStyle.copyWith(
+                  align: v ? LyricAlign.center : LyricAlign.left,
+                ),
+              );
+            },
+          ),
           _switchRow('歌词粗体', Icons.format_bold, state.lyricStyle.bold, (v) {
             state.updateLyricStyle(state.lyricStyle.copyWith(bold: v));
           }),
-          _switchRow('颜色随封面主色变化', Icons.palette_outlined,
-              state.lyricStyle.followCoverColor, (v) {
-            state.updateLyricStyle(
-                state.lyricStyle.copyWith(followCoverColor: v));
-          }),
-          _dropdownRow<String>('歌词字体', Icons.text_fields, state.lyricStyle.font,
-              kBuiltinFonts, (v) {
-            state.updateLyricStyle(state.lyricStyle.copyWith(font: v));
-          }),
+          _switchRow(
+            '颜色随封面主色变化',
+            Icons.palette_outlined,
+            state.lyricStyle.followCoverColor,
+            (v) {
+              state.updateLyricStyle(
+                state.lyricStyle.copyWith(followCoverColor: v),
+              );
+            },
+          ),
+          _dropdownRow<String>(
+            '歌词字体',
+            Icons.text_fields,
+            state.lyricStyle.font,
+            kBuiltinFonts,
+            (v) {
+              state.updateLyricStyle(state.lyricStyle.copyWith(font: v));
+            },
+          ),
           const SizedBox(height: 24),
           const Text('沉浸光感', style: MuyuTheme.section),
           const SizedBox(height: 8),
           _dropdownRow<ImmersiveGlass>(
-            '光感档位', Icons.blur_on, state.glass, ImmersiveGlass.values,
+            '光感档位',
+            Icons.blur_on,
+            state.glass,
+            ImmersiveGlass.values,
             (v) => state.setGlass(v),
             labelOf: (g) => kGlassLabels[g.index],
           ),
-          _switchRow('按压形变', Icons.touch_app, state.glassPress,
-              (v) => state.updateSkin(glassPress: v)),
-          _switchRow('滑动光效', Icons.animation, state.glassSlide,
-              (v) => state.updateSkin(glassSlide: v)),
+          _switchRow(
+            '按压形变',
+            Icons.touch_app,
+            state.glassPress,
+            (v) => state.updateSkin(glassPress: v),
+          ),
+          _switchRow(
+            '滑动光效',
+            Icons.animation,
+            state.glassSlide,
+            (v) => state.updateSkin(glassSlide: v),
+          ),
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text('光感颜色', style: MuyuTheme.body),
@@ -985,7 +1139,11 @@ class AppearancePage extends StatelessWidget {
   }
 
   Widget _switchRow(
-      String label, IconData icon, bool value, ValueChanged<bool> onChanged) {
+    String label,
+    IconData icon,
+    bool value,
+    ValueChanged<bool> onChanged,
+  ) {
     return ListTile(
       dense: true,
       leading: Icon(icon, color: MuyuColors.accent),
@@ -994,8 +1152,14 @@ class AppearancePage extends StatelessWidget {
     );
   }
 
-  Widget _dropdownRow<T>(String label, IconData icon, T value, List<T> items,
-      ValueChanged<T> onChanged, {String Function(T)? labelOf}) {
+  Widget _dropdownRow<T>(
+    String label,
+    IconData icon,
+    T value,
+    List<T> items,
+    ValueChanged<T> onChanged, {
+    String Function(T)? labelOf,
+  }) {
     return ListTile(
       dense: true,
       leading: Icon(icon, color: MuyuColors.accent),
@@ -1004,9 +1168,12 @@ class AppearancePage extends StatelessWidget {
         value: value,
         underline: const SizedBox.shrink(),
         items: items
-            .map((v) => DropdownMenuItem<T>(
+            .map(
+              (v) => DropdownMenuItem<T>(
                 value: v,
-                child: Text(labelOf == null ? v.toString() : labelOf(v))))
+                child: Text(labelOf == null ? v.toString() : labelOf(v)),
+              ),
+            )
             .toList(),
         onChanged: (v) {
           if (v != null) onChanged(v);
@@ -1046,9 +1213,10 @@ class _FavoriteListState extends State<_FavoriteList> {
     final songs = query.isEmpty
         ? widget.songs
         : widget.songs
-            .where((s) =>
-                s.name.contains(query) || s.artistText.contains(query))
-            .toList();
+              .where(
+                (s) => s.name.contains(query) || s.artistText.contains(query),
+              )
+              .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1172,14 +1340,20 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   itemBuilder: (context, i) {
                     final song = songs[i];
                     return ListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 4,
+                      ),
                       leading: CoverArt(url: song.cover, size: 44, seed: i),
-                      title: Text(song.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600)),
+                      title: Text(
+                        song.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       subtitle: Text(
                         song.album.isEmpty
                             ? song.artistText
@@ -1199,9 +1373,11 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                           ),
                           IconButton(
                             tooltip: '播放',
-                            icon: const Icon(Icons.play_circle_outline, size: 22),
-                            onPressed: () =>
-                                state.play(song, queue: songs),
+                            icon: const Icon(
+                              Icons.play_circle_outline,
+                              size: 22,
+                            ),
+                            onPressed: () => state.play(song, queue: songs),
                           ),
                           IconButton(
                             tooltip: '从本地库移除',

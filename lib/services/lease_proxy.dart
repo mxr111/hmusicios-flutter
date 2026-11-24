@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:math';
 
+import '../protocol/endpoints.dart';
+import 'app_log.dart';
 /// 与沐语 Go 版 media.Proxy.PublishStream / ServeHTTP / Revoke 对等：
 /// 不把华为 CDN 签名 URL 直接交给播放器，而是发布一个本机回环的一次性 URL，
 /// 由代理把播放器的 Range 请求透传到远端并回填 Content-Range。
@@ -10,17 +12,19 @@ class LeaseProxy {
   static final LeaseProxy instance = LeaseProxy._();
 
   HttpServer? _server;
-  String? _token;
-  Uri? _remote;
+  final Map<String, Uri> _leases = <String, Uri>{};
 
   int get port => _server?.port ?? 0;
-  bool get isActive => _token != null && _remote != null;
+  bool get isActive => _leases.isNotEmpty;
 
   Future<Uri> publish(Uri remote) async {
-    revoke();
     final r = Random.secure();
-    _token = List.generate(24, (_) => r.nextInt(16).toRadixString(16)).join();
-    _remote = remote;
+    final token = List.generate(24, (_) => r.nextInt(16).toRadixString(16)).join();
+    _leases[token] = remote;
+    // 保留最近 4 条租约，避免快速切歌时上一次 AVPlayer 请求被 410。
+    while (_leases.length > 4) {
+      _leases.remove(_leases.keys.first);
+    }
 
     if (_server == null) {
       _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -32,12 +36,11 @@ class LeaseProxy {
         },
       );
     }
-    return Uri.parse('http://127.0.0.1:${_server!.port}/lease/$_token');
+    return Uri.parse('http://127.0.0.1:${_server!.port}/lease/$token');
   }
 
   void revoke() {
-    _token = null;
-    _remote = null;
+    _leases.clear();
   }
 
   Future<void> dispose() async {
@@ -48,12 +51,12 @@ class LeaseProxy {
 
   Future<void> _handle(HttpRequest request) async {
     final response = request.response;
-    final token = _token;
-    final remote = _remote;
+    final token = request.uri.pathSegments.length >= 2
+        ? request.uri.pathSegments[1]
+        : '';
+    final remote = _leases[token];
 
-    if (token == null ||
-        remote == null ||
-        request.uri.path != '/lease/$token') {
+    if (token.isEmpty || remote == null || !request.uri.path.startsWith('/lease/')) {
       response.statusCode = HttpStatus.gone;
       await response.close();
       return;
@@ -75,7 +78,8 @@ class LeaseProxy {
           upstream.headers.set(name, values.join(', '));
         }
       });
-      upstream.headers.set('User-Agent', 'MuyuFlutter/1.0');
+      // 与沐语一致：CDN 对设备 UA 的签名/防盗链更稳定。
+      upstream.headers.set('User-Agent', HuaweiPaths.deviceContext);
 
       final upstreamResponse = await upstream.close();
       response.statusCode = upstreamResponse.statusCode;
@@ -109,6 +113,12 @@ class LeaseProxy {
         final type = _audioContentType(remote);
         if (type != null) response.headers.set('Content-Type', type);
       }
+      AppLog.add(
+        'proxy',
+        '${remote.path} -> ${upstreamResponse.statusCode} '
+        'type=${response.headers.contentType} '
+        'len=${upstreamResponse.contentLength}',
+      );
 
       if (request.method == 'HEAD') {
         await response.close();
@@ -118,9 +128,11 @@ class LeaseProxy {
         await response.close();
       }
     } on SocketException {
+      AppLog.add('proxy', 'socket error ${remote.path}');
       response.statusCode = HttpStatus.badGateway;
       await response.close();
-    } catch (_) {
+    } catch (e) {
+      AppLog.add('proxy', 'error ${remote.path}: $e');
       try {
         await response.close();
       } catch (_) {
