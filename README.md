@@ -35,6 +35,13 @@
 > - 搜索/榜单播放：MP3 兜底、设备 UA、CDN MIME 修正、LeaseProxy 保留最近 4 条租约；不可播时明确提示并自动跳过。
 > - 歌词：从 `lyricAddres` / `lyrics` / `contentExInfo` 递归抓取 HMRC/LRC 地址。
 
+> 🔵 **v7（2026-11-24）**：上游音质与首页推荐流。
+> - 默认音质改为 Hi-Res，实际按每首歌上游档位回退：`hiResAvailable`、`highestQuality`、`huaweiAudioFiles.types`、`fileInfos.qualityType`、`size_*`；不再把标准 MP3 硬塞进每首歌。
+> - 取流顺序改为“最高档 → 低档 → 标准兜底”，用户明确选择标准时才直接播标准。
+> - 首页按栏目拆分：`为你推荐` 独立走私享好歌栏目（`recom_exclusive` / `8011` / `column/detail/bycolumnid`），不再拿“新歌推荐”冒充。
+> - 五张卡分别绑定真实栏目：现在就听（三张封面随队列推进）、每日30首（当前月/日）、心动模式、新歌推荐、热歌速递。
+> - 「为你推荐」首屏按真实私享好歌列表分页（5 首/页），栏目为空时才回退到首页电台，不造假数据。
+
 > 🔴 **v2 重大修正（2026-11-23）**：REA 反编译拿不到函数伪代码（本机无 Ghidra/IDA/Hopper/Kuna 引擎），但找到了同源项目 tinglan 的源码，纠正了此前两个致命错误：
 > 1. **鉴权不是 Bearer**，而是 `Authorization: Digest username=app-music-baseline, nonce=<随机>, created=<UTC>, token=<music token>`；且需三段式：OAuth 授权（域名 `oauth-login.platform.hicloud.com`）→ 换账号 AT → `loginex` 换音乐 token + snsUserID。这解释了此前真机接口不通的根因。
 > 2. **取流 qualityType 是 "1"(MP3)/"3"(FLAC)**，不是 h/sq/hr；主音频用顶层 `fileURL`。

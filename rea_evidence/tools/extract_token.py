@@ -80,6 +80,14 @@ def main():
     if not found:
         print("token not found", file=sys.stderr)
         return 1
+    if "--all" in sys.argv:
+        seen = set()
+        for token in reversed(found):
+            if token in seen:
+                continue
+            seen.add(token)
+            print(token)
+        return 0
     print(found[-1])
     return 0
 

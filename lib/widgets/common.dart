@@ -224,6 +224,7 @@ class SongRow extends StatelessWidget {
     this.onMore,
     this.onArtistTap,
     this.index = 0,
+    this.showTags = true,
   });
 
   final Song song;
@@ -232,6 +233,7 @@ class SongRow extends StatelessWidget {
   final VoidCallback? onMore;
   final VoidCallback? onArtistTap;
   final int index;
+  final bool showTags;
 
   @override
   Widget build(BuildContext context) {
@@ -278,12 +280,13 @@ class SongRow extends StatelessWidget {
                 ],
               ),
             ),
-            if (song.member)
+            if (showTags && song.member)
               const Padding(
                 padding: EdgeInsets.only(right: 4),
                 child: Icon(Icons.diamond, size: 13, color: Color(0xFFE0A020)),
               ),
-            Padding(
+            if (showTags)
+              Padding(
               padding: const EdgeInsets.only(right: 6),
               child: QualityBadge(
                 song.qualities.isEmpty
@@ -291,7 +294,7 @@ class SongRow extends StatelessWidget {
                     : song.qualities.reduce((a, b) => a.index > b.index ? a : b),
                 small: true,
               ),
-            ),
+              ),
             TinyIconButton(
               icon: song.favorite ? Icons.favorite : Icons.favorite_border,
               color: song.favorite ? MuyuColors.primary : const Color(0xFF2AA560),

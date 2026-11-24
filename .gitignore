@@ -57,6 +57,8 @@ rea_evidence/_uncommitted.diff
 rea_evidence/_strip.py
 rea_evidence/ghidra_proj/
 rea_evidence/decomp_204.txt
+rea_evidence/home_decomp*.txt
+rea_evidence/radio_decomp.txt
 
 # 本地构建产物
 *.ipa

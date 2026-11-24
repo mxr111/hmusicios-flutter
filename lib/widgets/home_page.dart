@@ -30,12 +30,14 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final songs = state.homeSongs;
+    final songs = state.discover.recommended.isNotEmpty
+        ? state.discover.recommended
+        : state.homeSongs;
     final pageCount = songs.isEmpty ? 1 : ((songs.length + 4) ~/ 5);
     final page = _recPage.clamp(1, pageCount);
     final visibleSongs = songs.skip((page - 1) * 5).take(5).toList();
     final playlists = state.discover.playlists;
-    final cards = _cards(state);
+    final cards = _cards(state, songs);
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 120),
@@ -88,6 +90,7 @@ class _HomePageState extends State<HomePage> {
                   (song) => SongRow(
                     song: song,
                     index: songs.indexOf(song),
+                    showTags: false,
                     onPlay: () => state.play(song, queue: songs),
                     onFavorite: () => state.toggleFavorite(song),
                     onArtistTap: () => state.openArtistFromSong(song),
@@ -120,20 +123,8 @@ class _HomePageState extends State<HomePage> {
 
   Widget _header(BuildContext context, AppState state) {
     final pal = state.palette;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: <Color>[
-            pal.accent.withValues(alpha: 0.14),
-            pal.surface.withValues(alpha: 0.9),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(18),
-      ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -172,7 +163,7 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 12),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
+            constraints: const BoxConstraints(maxWidth: 300),
             child: TextField(
               controller: _search,
               onSubmitted: (value) => state.doSearch(value),
@@ -184,7 +175,7 @@ class _HomePageState extends State<HomePage> {
                 prefixIcon: const Icon(Icons.search,
                     size: 18, color: MuyuColors.inkMuted),
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.92),
+                fillColor: pal.surface,
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(22),
@@ -291,17 +282,46 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// 顶部卡片只展示接口真实返回的第一首歌/歌单/榜单，不再写死歌名。
-  List<HomeCardSpec> _cards(AppState state) {
+  /// 五张卡分别绑定首页真实栏目：
+  /// 现在就听（listen）/ 每日30首 / 心动模式 / 新歌推荐 / 热歌速递。
+  List<HomeCardSpec> _cards(AppState state, List<Song> recommendations) {
     final discover = state.discover;
-    final now = state.homeSongs.isNotEmpty ? state.homeSongs.first : null;
+    final listen = discover.listen.isNotEmpty
+        ? discover.listen
+        : (recommendations.isNotEmpty ? recommendations : state.homeSongs);
+    final now = listen.isNotEmpty ? listen.first : null;
     final newSong =
         discover.newSongs.isNotEmpty ? discover.newSongs.first : now;
-    final heart = discover.radio.isNotEmpty ? discover.radio.first : now;
+    final heart = discover.heart.isNotEmpty
+        ? discover.heart.first
+        : (discover.radio.isNotEmpty ? discover.radio.first : now);
+    final hotSong = discover.hot.isNotEmpty ? discover.hot.first : null;
     final daily = _firstWhereOrNull(
         discover.playlists, (Playlist p) => p.id == 'a001');
     final hot = _firstWhereOrNull(
         discover.charts, (Playlist p) => p.name.contains('热歌'));
+    final date = DateTime.now();
+    const months = <String>[
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    final listenCovers = <Uri>[];
+    for (final song in listen.take(3)) {
+      final cover = song.cover;
+      if (cover != null && !listenCovers.contains(cover)) {
+        listenCovers.add(cover);
+      }
+    }
     String subtitle(Song? song, String fallback) =>
         song == null ? fallback : '${song.name} · ${song.artistText}';
     return <HomeCardSpec>[
@@ -313,15 +333,17 @@ class _HomePageState extends State<HomePage> {
         icon: Icons.radio,
         action: 'radio',
         cover: now?.cover,
+        covers: listenCovers,
       ),
       HomeCardSpec(
-        badge: 'November',
+        badge: months[date.month - 1],
         title: '每日30首',
         subtitle: daily?.name ?? '点击打开每日推荐',
         gradient: MuyuColors.cardDaily,
         icon: Icons.calendar_month,
         action: 'daily',
         cover: daily?.cover,
+        bigText: '${date.day}',
       ),
       HomeCardSpec(
         badge: '♥',
@@ -344,11 +366,13 @@ class _HomePageState extends State<HomePage> {
       HomeCardSpec(
         badge: '热歌速递',
         title: '热歌速递',
-        subtitle: hot?.name ?? '点击打开热歌榜',
+        subtitle: hotSong != null
+            ? subtitle(hotSong, '热歌速递')
+            : (hot?.name ?? '点击打开热歌榜'),
         gradient: MuyuColors.cardHot,
         icon: Icons.whatshot,
         action: 'hot',
-        cover: hot?.cover,
+        cover: hotSong?.cover ?? hot?.cover,
       ),
     ];
   }
@@ -362,6 +386,18 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _playCard(AppState state, String action) async {
     switch (action) {
+      case 'radio':
+        final list = state.discover.listen.isNotEmpty
+            ? state.discover.listen
+            : (state.discover.recommended.isNotEmpty
+                ? state.discover.recommended
+                : state.homeSongs);
+        if (list.isNotEmpty) {
+          await state.play(list.first, queue: list);
+        } else {
+          await state.loadHome();
+        }
+        return;
       case 'daily':
         final daily = _firstWhereOrNull(
             state.discover.playlists, (Playlist p) => p.id == 'a001');
@@ -381,9 +417,11 @@ class _HomePageState extends State<HomePage> {
         }
         return;
       case 'heart':
-        final list = state.discover.radio.isNotEmpty
-            ? state.discover.radio
-            : state.homeSongs;
+        final list = state.discover.heart.isNotEmpty
+            ? state.discover.heart
+            : (state.discover.radio.isNotEmpty
+                ? state.discover.radio
+                : state.homeSongs);
         if (list.isNotEmpty) {
           await state.play(list.first, queue: list);
         } else {
@@ -393,7 +431,9 @@ class _HomePageState extends State<HomePage> {
       case 'new':
         final list = state.discover.newSongs.isNotEmpty
             ? state.discover.newSongs
-            : state.homeSongs;
+            : (state.discover.recommended.isNotEmpty
+                ? state.discover.recommended
+                : state.homeSongs);
         if (list.isNotEmpty) {
           await state.play(list.first, queue: list);
         } else {
@@ -401,8 +441,11 @@ class _HomePageState extends State<HomePage> {
         }
         return;
       default:
-        if (state.homeSongs.isNotEmpty) {
-          await state.play(state.homeSongs.first, queue: state.homeSongs);
+        final list = state.discover.recommended.isNotEmpty
+            ? state.discover.recommended
+            : state.homeSongs;
+        if (list.isNotEmpty) {
+          await state.play(list.first, queue: list);
         } else {
           await state.loadHome();
         }
@@ -581,7 +624,7 @@ class HomeCard extends StatelessWidget {
   Widget _center(HomeCardSpec spec, Color fg) {
     switch (spec.action) {
       case 'daily':
-        return Text('23',
+        return Text(spec.bigText ?? '30',
             style: TextStyle(
                 fontSize: 74,
                 fontWeight: FontWeight.w300,
@@ -590,9 +633,34 @@ class HomeCard extends StatelessWidget {
         return Icon(Icons.favorite,
             size: 84, color: fg.withValues(alpha: 0.92));
       case 'radio':
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 26),
-          child: CoverArt(url: spec.cover, size: 104, radius: 10, seed: 0),
+        final covers = spec.covers.isNotEmpty
+            ? spec.covers
+            : <Uri>[if (spec.cover != null) spec.cover!];
+        if (covers.isEmpty) {
+          return Icon(spec.icon, size: 72, color: fg.withValues(alpha: 0.85));
+        }
+        return SizedBox(
+          width: 136,
+          height: 116,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              for (var i = 0; i < covers.length; i++)
+                Positioned(
+                  left: 14.0 + i * 18,
+                  top: 20.0 - i * 2,
+                  child: Transform.rotate(
+                    angle: (i - (covers.length - 1) / 2) * 0.08,
+                    child: CoverArt(
+                      url: covers[i],
+                      size: 78,
+                      radius: 8,
+                      seed: i,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         );
       case 'new':
         return Padding(

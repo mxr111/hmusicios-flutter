@@ -45,7 +45,9 @@ class MuyuAudioController extends ChangeNotifier {
   final AudioPlayer _player = AudioPlayer();
 
   Song? current;
-  AudioQuality quality = AudioQuality.standard;
+  /// 与沐语 `quality: hires` 一致：默认请求上游最高档；实际档位由
+  /// `playSong` 根据该歌曲上游可用档位回退，不会强行把每首歌降成 MP3。
+  AudioQuality quality = AudioQuality.hiRes;
   List<Song> queue = <Song>[];
   int index = -1;
   Duration position = Duration.zero;
@@ -90,6 +92,18 @@ class MuyuAudioController extends ChangeNotifier {
     AudioQuality.standard,
   ];
 
+  /// 默认选用户/沐语设置的档位；该歌曲没有这个档位时，选上游能提供的
+  /// 最高档。默认 quality 是 hiRes，因此新会话默认拿最高可播档。
+  static AudioQuality chooseQuality(
+    AudioQuality requested,
+    Iterable<AudioQuality> supported,
+  ) {
+    final set = supported.toSet();
+    if (set.isEmpty) return requested;
+    if (set.contains(requested)) return requested;
+    return set.reduce((a, b) => a.index > b.index ? a : b);
+  }
+
   Future<void> playSong(Song song, {List<Song>? list}) async {
     if (list != null && list.isNotEmpty) {
       queue = List<Song>.of(list);
@@ -132,9 +146,7 @@ class MuyuAudioController extends ChangeNotifier {
         throw StateError('该音源未返回可播放地址');
       }
       final supported = files.isNotEmpty ? files.map((f) => f.quality).toSet() : song.qualities;
-      final wanted = supported.contains(quality)
-          ? quality
-          : supported.reduce((a, b) => a.index > b.index ? a : b);
+      final wanted = chooseQuality(quality, supported);
       HuaweiAudioFile chosen = files.firstWhere(
         (f) => f.quality == wanted,
         orElse: () => files.first,

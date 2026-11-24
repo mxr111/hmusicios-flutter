@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/pages/secondary_pages.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
+import 'package:muyu_flutter/protocol/huawei_gateway.dart';
 import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/services/session_store.dart';
 import 'package:muyu_flutter/theme.dart';
@@ -76,6 +77,40 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('推荐歌单'), findsOneWidget);
     expect(find.text('每日30首'), findsWidgets);
+    state.dispose();
+  });
+
+  testWidgets('主页为你推荐使用独立私享好歌流，30 首按 5 首一页', (tester) async {
+    final state = AppState();
+    state.api.gateway.session =
+        MusicSession(token: 'test-token', snsUserId: 'test-user');
+    final recommended = List<Song>.generate(
+      30,
+      (i) => Song(
+        id: 'rec-$i',
+        name: '私享好歌$i',
+        artists: const <String>['真实歌手'],
+      ),
+    );
+    state.homeSongs = recommended;
+    state.discover = DiscoverData(
+      recommended: recommended,
+      listen: recommended.take(3).toList(),
+      newSongs: <Song>[
+        Song(id: 'new-only', name: '新歌推荐字段', artists: <String>['新歌手']),
+      ],
+    );
+
+    await tester.binding.setSurfaceSize(const Size(1460, 980));
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: Scaffold(body: HomePage(state: state)),
+    ));
+    await tester.pump();
+
+    expect(find.text('1/6'), findsOneWidget);
+    expect(find.text('私享好歌0', skipOffstage: false), findsOneWidget);
+    expect(find.text('私享好歌5', skipOffstage: false), findsNothing);
     state.dispose();
   });
 

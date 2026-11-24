@@ -227,6 +227,8 @@ class HomeCardSpec {
     required this.icon,
     required this.action,
     this.cover,
+    this.covers = const <Uri>[],
+    this.bigText,
   });
   final String badge;
   final String title;
@@ -235,4 +237,6 @@ class HomeCardSpec {
   final IconData icon;
   final String action; // radio / daily / heart / new / hot
   final Uri? cover;
+  final List<Uri> covers;
+  final String? bigText;
 }

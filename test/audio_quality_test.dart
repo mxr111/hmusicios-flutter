@@ -3,6 +3,7 @@ import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/endpoints.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/protocol/huawei_gateway.dart';
+import 'package:muyu_flutter/services/audio_controller.dart';
 
 class _PlaybackGateway extends HuaweiGateway {
   _PlaybackGateway({this.allAudition = false});
@@ -62,10 +63,13 @@ void main() {
       upstreamQualities: const <AudioQuality>{AudioQuality.hiRes},
     );
 
-    expect(files, hasLength(1));
-    expect(files.single.quality, AudioQuality.hiRes);
-    expect(files.single.url.toString(), contains('HIRES.flac'));
-    expect(files.single.url.toString(), isNot(contains('_AQ')));
+    // 最高档 + 标准档兜底都会返回；默认播放仍选 Hi-Res。
+    expect(files.first.quality, AudioQuality.hiRes);
+    expect(files.any((f) => f.quality == AudioQuality.hiRes), isTrue);
+    expect(files.first.url.toString(), contains('HIRES.flac'));
+    for (final file in files) {
+      expect(file.url.toString(), isNot(contains('_AQ')));
+    }
   });
 
   test('标准档请求返回完整文件', () async {
@@ -99,5 +103,39 @@ void main() {
     );
     expect(files, isNotEmpty);
     expect(files.first.url.toString(), contains('full_1.mp3'));
+  });
+
+  test('默认音质选上游最高可播档，用户明确选标准时才降级', () {
+    expect(
+      MuyuAudioController.chooseQuality(
+        AudioQuality.hiRes,
+        const <AudioQuality>{
+          AudioQuality.standard,
+          AudioQuality.lossless,
+          AudioQuality.hiRes,
+        },
+      ),
+      AudioQuality.hiRes,
+    );
+    expect(
+      MuyuAudioController.chooseQuality(
+        AudioQuality.hiRes,
+        const <AudioQuality>{
+          AudioQuality.standard,
+          AudioQuality.lossless,
+        },
+      ),
+      AudioQuality.lossless,
+    );
+    expect(
+      MuyuAudioController.chooseQuality(
+        AudioQuality.standard,
+        const <AudioQuality>{
+          AudioQuality.standard,
+          AudioQuality.hiRes,
+        },
+      ),
+      AudioQuality.standard,
+    );
   });
 }

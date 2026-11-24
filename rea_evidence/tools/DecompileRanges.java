@@ -84,10 +84,39 @@ public class DecompileRanges extends GhidraScript {
                 new DisassembleCommand(range, null, true).applyTo(currentProgram, monitor);
                 Function function = getFunctionAt(start);
                 if (function == null) {
+                    function = getFunctionContaining(start);
+                    if (function != null) {
+                        out.println("// using containing function " + function.getName()
+                            + " @ " + function.getEntryPoint()
+                            + " (requested " + addressText + ")");
+                    }
+                }
+                if (function == null) {
                     function = createFunction(start, name);
                 }
                 if (function == null) {
+                    for (int offset = 1; offset <= 4; offset++) {
+                        Address candidate = start.add(offset);
+                        new DisassembleCommand(candidate, null, true)
+                            .applyTo(currentProgram, monitor);
+                        function = getFunctionAt(candidate);
+                        if (function == null) {
+                            function = createFunction(candidate, name);
+                        }
+                        if (function != null) {
+                            out.println("// function starts " + offset
+                                + " byte(s) after symbol: " + candidate);
+                            break;
+                        }
+                    }
+                }
+                if (function == null) {
                     out.println("!! createFunction failed");
+                    Function containing = getFunctionContaining(start);
+                    if (containing != null) {
+                        out.println("// containing function: " + containing.getName()
+                            + " @ " + containing.getEntryPoint());
+                    }
                     out.println();
                     continue;
                 }

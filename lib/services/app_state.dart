@@ -201,7 +201,12 @@ class AppState extends ChangeNotifier {
         }
       }
       discover = _rotateDiscover(data);
-      homeSongs = discover.newSongs;
+      // 「为你推荐」是独立私享好歌流，不再拿「新歌推荐」冒充。
+      homeSongs = discover.recommended.isNotEmpty
+          ? discover.recommended
+          : (discover.radio.isNotEmpty
+              ? discover.radio
+              : discover.newSongs);
       playlists = discover.playlists;
       charts = discover.charts;
       discoverLoaded = true;
@@ -224,6 +229,11 @@ class AppState extends ChangeNotifier {
       charts: data.charts,
       radio: _rotate(data.radio),
       albums: _rotate(data.albums),
+      recommended: _rotate(data.recommended),
+      listen: _rotate(data.listen),
+      heart: _rotate(data.heart),
+      hot: data.hot,
+      recommendedColumnId: data.recommendedColumnId,
     );
   }
 

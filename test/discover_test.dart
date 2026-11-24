@@ -1,6 +1,45 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
+import 'package:muyu_flutter/protocol/huawei_gateway.dart';
+
+class _HomeGateway extends HuaweiGateway {
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    if (path.startsWith('/music-operation-service/v1/service/page/detail/all')) {
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'columnInfoExs': <dynamic>[
+            <String, dynamic>{
+              'columnInfo': <String, dynamic>{
+                'columnKey': 'recom_exclusive',
+                'columnId': '8011',
+              },
+              'contentSimpleInfos': <dynamic>[],
+            },
+          ],
+        },
+      };
+    }
+    if (path.contains('/column/detail/bycolumnid')) {
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'listRcmInfos': <dynamic>[
+            <String, dynamic>{
+              'contentID': 'rec-8011-1',
+              'contentName': '私享好歌详情一',
+            },
+            <String, dynamic>{
+              'contentID': 'rec-8011-2',
+              'contentName': '私享好歌详情二',
+            },
+          ],
+        },
+      };
+    }
+    throw StateError('unexpected get $path');
+  }
+}
 
 void main() {
   test('榜单解析只使用真实字段，不生成假名字', () {
@@ -84,6 +123,74 @@ void main() {
     expect(d.newSongs.first.durationMs, 210000);
   });
 
+  test('首页按栏目拆分：为你推荐/现在就听/心动/新歌/热歌互不冒充', () {
+    Map<String, dynamic> song(String id, String name) => <String, dynamic>{
+          'contentID': id,
+          'contentName': name,
+          'durationSeconds': 200,
+        };
+    Map<String, dynamic> column(
+      String key,
+      String id,
+      Map<String, dynamic> content,
+    ) =>
+        <String, dynamic>{
+          'columnInfo': <String, dynamic>{
+            'columnKey': key,
+            'columnId': id,
+          },
+          'contentSimpleInfos': <dynamic>[content],
+        };
+
+    final d = HuaweiAPI.parseDiscover(<String, dynamic>{
+      'result': <String, dynamic>{
+        'columnInfoExs': <dynamic>[
+          column('recom_exclusive', '8011', <String, dynamic>{
+            'contentType': '1',
+            ...song('rec-1', '私享好歌一'),
+          }),
+          column('recom_exclusive', '8011', <String, dynamic>{
+            'contentType': '1',
+            ...song('rec-2', '私享好歌二'),
+          }),
+          column('home-listen', 'listen', <String, dynamic>{
+            'contentType': '12',
+            'listRcmInfos': <dynamic>[song('listen-1', '现在就听一')],
+          }),
+          column('home-heart', 'heart', <String, dynamic>{
+            'contentType': '12',
+            'listRcmInfos': <dynamic>[song('heart-1', '心动模式一')],
+          }),
+          column('home-new', 'new', <String, dynamic>{
+            'contentType': '1',
+            ...song('new-1', '新歌推荐一'),
+          }),
+          column('home-hot', 'hot', <String, dynamic>{
+            'contentType': '1',
+            ...song('hot-1', '热歌速递一'),
+          }),
+        ],
+      },
+    });
+
+    expect(d.recommended.map((s) => s.id), <String>['rec-1', 'rec-2']);
+    expect(d.listen.map((s) => s.id), <String>['listen-1']);
+    expect(d.heart.map((s) => s.id), <String>['heart-1']);
+    expect(d.newSongs.map((s) => s.id), <String>['new-1']);
+    expect(d.hot.map((s) => s.id), <String>['hot-1']);
+    expect(d.recommendedColumnId, '8011');
+  });
+
+  test('首页未直接返回私享好歌时，按栏目 8011 拉详情', () async {
+    final api = HuaweiAPI(gateway: _HomeGateway());
+    final d = await api.discover();
+    expect(d.recommendedColumnId, '8011');
+    expect(d.recommended.map((s) => s.id), <String>[
+      'rec-8011-1',
+      'rec-8011-2',
+    ]);
+  });
+
   test('parseSong 解析 artistNamePairs 的歌手名与 ID（REA HomeSongs 字段）', () {
     final s = HuaweiAPI.parseSong(<String, dynamic>{
       'contentID': 'song-with-artist',
@@ -133,6 +240,10 @@ void main() {
     expect(d.playlists, isEmpty);
     expect(d.charts, isEmpty);
     expect(d.radio, isEmpty);
+    expect(d.recommended, isEmpty);
+    expect(d.listen, isEmpty);
+    expect(d.heart, isEmpty);
+    expect(d.hot, isEmpty);
   });
 
   upstreamQualityTests();
@@ -170,6 +281,24 @@ void upstreamQualityTests() {
       'contentName': 'y',
     });
     expect(q, <AudioQuality>{AudioQuality.standard});
+  });
+
+  test('上游华为 highestQuality/hiResAvailable/huaweiAudioFiles 决定档位', () {
+    final hiRes = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'hiResAvailable': true,
+      'highestQuality': 'hires',
+      'huaweiAudioFiles': <String, dynamic>{'types': 110},
+    });
+    expect(hiRes, contains(AudioQuality.hiRes));
+    expect(hiRes, contains(AudioQuality.lossless));
+
+    final sq = HuaweiAPI.qualitiesFromUpstream(<String, dynamic>{
+      'hiResAvailable': false,
+      'highestQuality': 'sq',
+      'huaweiAudioFiles': <String, dynamic>{'types': 14},
+    });
+    expect(sq, contains(AudioQuality.lossless));
+    expect(sq, isNot(contains(AudioQuality.hiRes)));
   });
 
   test('码率到档位映射遵循网易云 level 体系', () {
