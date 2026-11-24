@@ -34,7 +34,7 @@ class Sidebar extends StatelessWidget {
           _item(3, Icons.album_outlined, '唱片架'),
           _item(4, Icons.person_outline, '我的'),
           const SizedBox(height: 18),
-          _customEntry(),
+          _customEntry(context),
           const SizedBox(height: 6),
           _localMusic(),
           const Spacer(),
@@ -151,7 +151,7 @@ class Sidebar extends StatelessWidget {
     );
   }
 
-  Widget _customEntry() {
+  Widget _customEntry(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18),
       child: Row(
@@ -165,7 +165,11 @@ class Sidebar extends StatelessWidget {
             child: IconButton(
               padding: EdgeInsets.zero,
               icon: const Icon(Icons.add, size: 15, color: MuyuColors.inkMuted),
-              onPressed: () {},
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('自定义入口将在后续版本开放')),
+                );
+              },
             ),
           ),
         ],

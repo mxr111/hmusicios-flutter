@@ -36,7 +36,7 @@ class _HomePageState extends State<HomePage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 108),
       children: [
-        _header(state),
+        _header(context, state),
         const SizedBox(height: 14),
         _searchField(),
         const SizedBox(height: 20),
@@ -92,7 +92,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _header(AppState state) {
+  Widget _header(BuildContext context, AppState state) {
     return Row(
       children: [
         const Text('主页', style: MuyuTheme.title),
@@ -100,7 +100,12 @@ class _HomePageState extends State<HomePage> {
         Flexible(child: SourceSwitcher(state: state)),
         const Spacer(),
         OutlinedButton.icon(
-          onPressed: () {},
+          onPressed: () {
+            state.selectTab(1);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('千语取歌：输入歌曲或歌手名开始搜索')),
+            );
+          },
           icon: const Icon(Icons.auto_awesome, size: 14),
           label: const Text('千语取歌', style: TextStyle(fontSize: 12)),
           style: OutlinedButton.styleFrom(
@@ -378,74 +383,77 @@ class HomeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final lightText = spec.action != 'new';
     final fg = lightText ? Colors.white : const Color(0xFF2A2A30);
-    return Container(
-      width: MuyuDims.cardWidth,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: spec.gradient,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    return GestureDetector(
+      onTap: onPlay,
+      child: Container(
+        width: MuyuDims.cardWidth,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: spec.gradient,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(MuyuDims.radius),
         ),
-        borderRadius: BorderRadius.circular(MuyuDims.radius),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: 16,
-            left: 16,
-            child: Text(
-              spec.badge,
-              style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700, color: fg),
+        child: Stack(
+          children: [
+            Positioned(
+              top: 16,
+              left: 16,
+              child: Text(
+                spec.badge,
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700, color: fg),
+              ),
             ),
-          ),
-          Center(child: _center(spec, fg)),
-          Positioned(
-            left: 14,
-            right: 12,
-            bottom: 14,
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(spec.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: fg)),
-                      const SizedBox(height: 3),
-                      Text(spec.subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: fg.withValues(alpha: 0.75))),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                InkWell(
-                  onTap: onPlay,
-                  child: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.28),
-                      shape: BoxShape.circle,
+            Center(child: _center(spec, fg)),
+            Positioned(
+              left: 14,
+              right: 12,
+              bottom: 14,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(spec.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: fg)),
+                        const SizedBox(height: 3),
+                        Text(spec.subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: fg.withValues(alpha: 0.75))),
+                      ],
                     ),
-                    child: Icon(Icons.play_arrow,
-                        size: 22, color: fg),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: onPlay,
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.28),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.play_arrow,
+                          size: 22, color: fg),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
