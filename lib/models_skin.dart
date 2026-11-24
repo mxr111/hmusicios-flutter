@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 /// 音源（沐语支持 5 家，本项目接通华为 + 网易云；其余按用户约束未接入）。
 enum MusicSource {
   huawei('华为音乐'),
-  netease('网易云音乐');
+  netease('网易云音乐'),
+  kugou('酷狗音乐'),
+  qq('QQ音乐');
 
   const MusicSource(this.label);
   final String label;

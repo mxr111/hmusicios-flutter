@@ -1,6 +1,13 @@
 # 沐语 Flutter 复刻版（MuyuFlutter）
 
-基于 **REA 对 `C:\沐语\Muyu.exe`（沐语 v2.0.3 Windows 客户端）的静态逆向 + 运行时进程内存取证**，并用同源项目 **tinglan（Go+Viva 华为音乐客户端，209 个 Go 源码文件）** 做源码级交叉校正，用 Flutter 重写其界面与「华为音乐」播放闭环。按需求**只接华为音乐一家数据源**。
+基于 **REA 对沐语 Windows 客户端（v2.0.3 / v2.0.4）的静态逆向 + 运行时进程内存取证**，并用同源项目 **tinglan（Go+Viva 华为音乐客户端）** 做源码级交叉校正，用 Flutter 重写其界面与四音源播放闭环。
+
+> 🟢 **v3（2026-11-24）**：四音源（华为 / 网易云 / 酷狗 / QQ）+ 本地音乐 + 登录态持久化 + 全量分页。
+> - 华为收藏 / 自建歌单 / 收藏歌单 / 歌手歌曲不再截断在 50 首，按 50 一页翻到短页（去重、无进展即停）。
+> - 启动时恢复华为音乐 token / 网易云 MUSIC_U / 酷狗 Cookie / QQ Cookie，不再每次打开都重新扫码。
+> - 搜索页新增「歌曲 / 歌手 / 专辑」三栏；华为响应含 artistSimpleInfos / albumSimpleInfos 时直接展示。
+> - 本地音乐：系统文件选择 → 复制进沙箱 → 解析 ID3v2 / FLAC Vorbis → 持久化 → 直接播放。
+> - 酷狗 / QQ 协议见 `rea_evidence/PROVIDER_PROTOCOL_EVIDENCE.md`；签名算法来自公开协议，标注「待真机验证」。
 
 > 🔴 **v2 重大修正（2026-11-23）**：REA 反编译拿不到函数伪代码（本机无 Ghidra/IDA/Hopper/Kuna 引擎），但找到了同源项目 tinglan 的源码，纠正了此前两个致命错误：
 > 1. **鉴权不是 Bearer**，而是 `Authorization: Digest username=app-music-baseline, nonce=<随机>, created=<UTC>, token=<music token>`；且需三段式：OAuth 授权（域名 `oauth-login.platform.hicloud.com`）→ 换账号 AT → `loginex` 换音乐 token + snsUserID。这解释了此前真机接口不通的根因。
@@ -113,8 +120,9 @@ flutter build ipa --no-codesign # 仅 macOS + Xcode
 
 ## 七、已知缺口
 
-- 🔴 **请求签名算法未还原**：静态逆向与运行时内存都没看到 timestamp/nonce/signature。若接口返回 **401/403**，即为该缺口；需自有账号抓包补齐。设置页支持手动填入 `access_token` 调试。
-- 账号密码登录字段为 REA 路径 + 推断，可能不通；华为 OAuth PKCE 在原生版已实现，Flutter 版保留端点常量。
-- 其它音源（酷狗 / QQ / 网易云）图标保留但置灰，本项目不接入。
-- 未登录时展示的是截图同款离线占位数据，不是真实曲库。
+- 🔴 **华为业务请求的额外签名仍未还原**：若接口返回 401/403，需自有账号抓包补齐；设置页支持手动填入 `access_token` 调试。
+- 酷狗 `signature` / QQ `zzcSign` 已按二进制字符串与公开协议实现，并写了离线单测，但**未用真实账号联网验证**；失败时 UI 会显示真实错误。
+- 酷狗 / QQ 目前只做「Cookie 手动登录」+ 搜索 / 歌单 / 歌词 / 取流 / 评论；扫码登录、收藏与歌单增删尚未接入。
+- 本地音乐已解析 ID3v2 / FLAC 标签，但内嵌封面（APIC / FLAC PICTURE）暂未显示，使用渐变占位。
+- 网易云 / 酷狗 / QQ 的歌手页用「歌手名搜索」兜底，不是原版独立歌手详情接口。
 - IPA 未签名，需 AltStore / Sideloadly / 自有证书自签。

@@ -5,26 +5,54 @@ import '../models.dart';
 import '../models_home.dart';
 import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
+import '../protocol/kugou_api.dart';
 import '../protocol/netease_api.dart';
+import '../protocol/qq_api.dart';
 import '../theme.dart';
 import 'audio_controller.dart';
+import 'local_library.dart';
+import 'session_store.dart';
 
 /// 全局状态：零第三方状态管理，直接用 ChangeNotifier + AnimatedBuilder。
 class AppState extends ChangeNotifier {
-  AppState() {
+  AppState({SessionStore? sessionStore})
+      : _sessionStore = sessionStore ?? PreferencesSessionStore() {
     audio.addListener(notifyListeners);
+    local.addListener(notifyListeners);
+    // 授权码换到的账号 token / 音乐 token 变化时立刻持久化。
+    api.gateway.onSessionChanged = () => persistSession();
   }
 
+  final SessionStore _sessionStore;
   final HuaweiAPI api = HuaweiAPI();
   final NeteaseApi netease = NeteaseApi();
+  final KugouApi kugou = KugouApi();
+  final QqApi qq = QqApi();
+  final LocalLibrary local = LocalLibrary();
 
   /// 当前音源（沐语支持多平台；本项目接通华为 + 网易云）。
   MusicSource source = MusicSource.huawei;
-  bool get isLoggedIn => source == MusicSource.netease
-      ? netease.isLoggedIn
-      : api.isLoggedIn;
+  bool get isLoggedIn => switch (source) {
+        MusicSource.huawei => api.isLoggedIn,
+        MusicSource.netease => netease.isLoggedIn,
+        MusicSource.kugou => kugou.isLoggedIn,
+        MusicSource.qq => qq.isLoggedIn,
+      };
 
-  late final MuyuAudioController audio = MuyuAudioController(api, netease: netease);
+  /// 当前音源的账号显示名（侧栏 / 我的页共用）。
+  String get accountName => switch (source) {
+        MusicSource.huawei =>
+          api.displayName ?? (api.isLoggedIn ? '华为音乐用户' : '未登录'),
+        MusicSource.netease =>
+          (netease.gateway.session?.nickname.isNotEmpty ?? false)
+              ? netease.gateway.session!.nickname
+              : (netease.isLoggedIn ? '网易云用户' : '未登录'),
+        MusicSource.kugou => kugou.isLoggedIn ? kugou.displayName : '未登录',
+        MusicSource.qq => qq.isLoggedIn ? qq.displayName : '未登录',
+      };
+
+  late final MuyuAudioController audio =
+      MuyuAudioController(api, netease: netease, kugou: kugou, qq: qq);
 
   int tab = 0;
   bool loading = false;
@@ -79,6 +107,8 @@ class AppState extends ChangeNotifier {
 
   List<Song> homeSongs = <Song>[];
   List<Song> searchResults = <Song>[];
+  List<Artist> searchArtists = <Artist>[];
+  List<Playlist> searchAlbums = <Playlist>[];
   List<Song> favorites = <Song>[];
   List<Playlist> playlists = <Playlist>[];
   List<Playlist> charts = <Playlist>[];
@@ -127,8 +157,29 @@ class AppState extends ChangeNotifier {
       await loadNeteaseHome();
       return;
     }
+    if (source == MusicSource.kugou) {
+      await loadKugouHome();
+      return;
+    }
+    if (source == MusicSource.qq) {
+      await loadQqHome();
+      return;
+    }
     await _guard(() async {
-      discover = await api.discover();
+      var data = await api.discover();
+      // 首页聚合接口偶发返回空结构：改用推荐歌单/榜单两个独立服务兜底，
+      // 仍是真实接口数据，不填假歌。
+      if (data.newSongs.isEmpty &&
+          data.playlists.isEmpty &&
+          data.charts.isEmpty &&
+          data.radio.isEmpty) {
+        final lists = await _soft(api.recommendedPlaylists(), <Playlist>[]);
+        final charts = await _soft(api.charts(), <Playlist>[]);
+        if (lists.isNotEmpty || charts.isNotEmpty) {
+          data = DiscoverData(playlists: lists, charts: charts);
+        }
+      }
+      discover = data;
       homeSongs = discover.newSongs;
       playlists = discover.playlists;
       charts = discover.charts;
@@ -167,6 +218,42 @@ class AppState extends ChangeNotifier {
       neteaseHomeLoading = false;
       notifyListeners();
     }
+  }
+
+  /// 酷狗首页：每日推荐 + TOP500 + 用户歌单，全部走真实接口。
+  Future<void> loadKugouHome() async {
+    if (!kugou.isLoggedIn) return;
+    await _guard(() async {
+      final daily = await _soft(kugou.homeSongs(), <Song>[]);
+      final rank = await _soft(kugou.homeRank(), <Song>[]);
+      final lists = await _soft(kugou.userPlaylists(), <Playlist>[]);
+      homeSongs = mergeSongs(<List<Song>>[daily, rank]);
+      playlists = lists;
+      charts = const <Playlist>[
+        Playlist(id: '8888', name: '酷狗 TOP500', kind: 'chart'),
+      ];
+      discover = DiscoverData(
+        newSongs: homeSongs,
+        playlists: lists,
+        charts: charts,
+        radio: daily,
+      );
+      discoverLoaded = true;
+    });
+  }
+
+  /// QQ 首页：推荐歌曲 + 歌单广场 + 我的歌单。
+  Future<void> loadQqHome() async {
+    await _guard(() async {
+      final songs = await _soft(qq.homeSongs(), <Song>[]);
+      final square = await _soft(qq.homePlaylists(), <Playlist>[]);
+      final mine = await _soft(qq.userPlaylists(), <Playlist>[]);
+      homeSongs = songs;
+      playlists = <Playlist>[...mine, ...square];
+      charts = const <Playlist>[];
+      discover = DiscoverData(newSongs: songs, playlists: playlists);
+      discoverLoaded = true;
+    });
   }
 
   /// 推荐歌单「换一批」：按 offset 拉下一页，去重后追加。
@@ -228,13 +315,21 @@ class AppState extends ChangeNotifier {
     charts = <Playlist>[];
     chartSongs = <Song>[];
     searchResults = <Song>[];
+    searchArtists = <Artist>[];
+    searchAlbums = <Playlist>[];
     neteaseHome = const NeteaseHomeData();
     neteaseHomeError = null;
     neteasePlaylistOffset = 0;
     neteaseHasMorePlaylists = true;
     notifyListeners();
     // 网易云公开推荐无需登录；华为必须登录后才请求业务接口。
-    if (newSource == MusicSource.netease || isLoggedIn) await loadHome();
+    if (newSource == MusicSource.kugou) {
+      await loadKugouHome();
+    } else if (newSource == MusicSource.qq) {
+      await loadQqHome();
+    } else if (newSource == MusicSource.netease || isLoggedIn) {
+      await loadHome();
+    }
   }
 
   Future<void> loadChart(String chartId) async {
@@ -252,11 +347,16 @@ class AppState extends ChangeNotifier {
     showLyrics = false;
     notifyListeners();
     playlistSongsList = await _soft(
-      source == MusicSource.netease
-          ? netease.playlistTracks(playlist.id)
-          : (playlist.kind == 'chart'
-              ? api.chartSongs(playlist.id)
-              : api.playlistSongs(playlist)),
+      switch (source) {
+        MusicSource.netease => netease.playlistTracks(playlist.id),
+        MusicSource.kugou => kugou.playlistTracks(playlist.id),
+        MusicSource.qq => qq.playlistTracks(playlist.id),
+        MusicSource.huawei => playlist.kind == 'album'
+            ? api.albumSongs(playlist.id)
+            : playlist.kind == 'chart'
+                ? api.chartSongs(playlist.id)
+                : api.playlistSongs(playlist),
+      },
       <Song>[],
     );
     notifyListeners();
@@ -272,6 +372,22 @@ class AppState extends ChangeNotifier {
     activeArtist = Artist(id: artistCode, name: name.isEmpty ? '歌手' : name);
     artistSongsList = <Song>[];
     notifyListeners();
+    // 网易云/酷狗暂无独立「歌手详情」接口：用歌手名搜索其歌曲，
+    // 结果仍是真实接口数据，不伪造歌手页。
+    if (source == MusicSource.netease ||
+        source == MusicSource.kugou ||
+        source == MusicSource.qq) {
+      artistSongsList = await _soft(
+        source == MusicSource.netease
+            ? netease.search(activeArtist!.name)
+            : source == MusicSource.kugou
+                ? kugou.search(activeArtist!.name)
+                : qq.search(activeArtist!.name),
+        <Song>[],
+      );
+      notifyListeners();
+      return;
+    }
     final results = await Future.wait<dynamic>(<Future<dynamic>>[
       _soft<dynamic>(api.artistDetail(artistCode), const Artist(id: '', name: '')),
       _soft<dynamic>(api.artistSongs(artistCode), <Song>[]),
@@ -307,9 +423,12 @@ class AppState extends ChangeNotifier {
     comments = <Comment>[];
     notifyListeners();
     comments = await _soft(
-      source == MusicSource.netease
-          ? netease.comments(songCode)
-          : api.comments(songCode),
+      switch (source) {
+        MusicSource.netease => netease.comments(songCode),
+        MusicSource.kugou => kugou.comments(songCode),
+        MusicSource.qq => qq.comments(songCode),
+        MusicSource.huawei => api.comments(songCode),
+      },
       <Comment>[],
     );
     notifyListeners();
@@ -320,9 +439,7 @@ class AppState extends ChangeNotifier {
     song.favorite = next;
     notifyListeners();
     try {
-      if (source == MusicSource.netease) {
-        // 网易云收藏：本地维护状态（radio/like 需额外接口，留待 write 接口）。
-      } else {
+      if (source == MusicSource.huawei) {
         await api.toggleFavorite(song.id, next);
       }
       if (next && !favorites.any((s) => s.id == song.id)) {
@@ -364,6 +481,10 @@ class AppState extends ChangeNotifier {
       if (source == MusicSource.netease) {
         playlists = await _soft(
             netease.userPlaylists(''), <Playlist>[]); // uid 由登录后填
+      } else if (source == MusicSource.kugou) {
+        playlists = await _soft(kugou.userPlaylists(), <Playlist>[]);
+      } else if (source == MusicSource.qq) {
+        playlists = await _soft(qq.userPlaylists(), <Playlist>[]);
       } else {
         favorites = await api.favorites();
         try {
@@ -380,6 +501,46 @@ class AppState extends ChangeNotifier {
     await _guard(() async {
       late List<Song> songs;
       final ne = source == MusicSource.netease;
+      if (source == MusicSource.kugou) {
+        switch (action) {
+          case 'hot':
+            songs = await kugou.homeRank();
+            break;
+          case 'daily':
+          case 'radio':
+          case 'heart':
+          case 'new':
+            songs = homeSongs.isNotEmpty ? homeSongs : await kugou.homeSongs();
+            break;
+          default:
+            songs = homeSongs;
+        }
+        if (songs.isNotEmpty) {
+          await play(songs.first, queue: songs);
+        } else {
+          error = '「$action」接口未返回歌曲（确认已登录 / 网络可用）';
+        }
+        return;
+      }
+      if (source == MusicSource.qq) {
+        switch (action) {
+          case 'hot':
+          case 'new':
+          case 'daily':
+          case 'radio':
+          case 'heart':
+            songs = homeSongs.isNotEmpty ? homeSongs : await qq.homeSongs();
+            break;
+          default:
+            songs = homeSongs;
+        }
+        if (songs.isNotEmpty) {
+          await play(songs.first, queue: songs);
+        } else {
+          error = '「$action」接口未返回歌曲（确认已登录 / 网络可用）';
+        }
+        return;
+      }
       switch (action) {
         case 'radio':
           songs = ne
@@ -434,13 +595,30 @@ class AppState extends ChangeNotifier {
     searchKeyword = keyword.trim();
     if (searchKeyword.isEmpty) {
       searchResults = <Song>[];
+      searchArtists = <Artist>[];
+      searchAlbums = <Playlist>[];
       notifyListeners();
       return;
     }
     await _guard(() async {
-      searchResults = source == MusicSource.netease
-          ? await netease.search(searchKeyword)
-          : await api.search(searchKeyword);
+      if (source == MusicSource.netease) {
+        searchResults = await netease.search(searchKeyword);
+        searchArtists = <Artist>[];
+        searchAlbums = <Playlist>[];
+      } else if (source == MusicSource.kugou) {
+        searchResults = await kugou.search(searchKeyword);
+        searchArtists = <Artist>[];
+        searchAlbums = <Playlist>[];
+      } else if (source == MusicSource.qq) {
+        searchResults = await qq.search(searchKeyword);
+        searchArtists = <Artist>[];
+        searchAlbums = <Playlist>[];
+      } else {
+        final result = await api.searchAll(searchKeyword);
+        searchResults = result.songs;
+        searchArtists = result.artists;
+        searchAlbums = result.albums;
+      }
       tab = 1;
     });
   }
@@ -449,9 +627,12 @@ class AppState extends ChangeNotifier {
     showLyrics = true;
     notifyListeners();
     try {
-      lyrics = source == MusicSource.netease
-          ? await netease.lyrics(song.id)
-          : await api.lyrics(song.id);
+      lyrics = switch (source) {
+        MusicSource.netease => await netease.lyrics(song.id),
+        MusicSource.kugou => await kugou.lyrics(song.id),
+        MusicSource.qq => await qq.lyrics(song.id),
+        MusicSource.huawei => await api.lyrics(song.id),
+      };
     } catch (_) {
       lyrics = <LyricLine>[];
     }
@@ -479,23 +660,88 @@ class AppState extends ChangeNotifier {
   void toggleTheme() {
     themeIndex = (themeIndex + 1) % kMuyuPalettes.length;
     notifyListeners();
+    persistSession();
   }
 
   void setTheme(int index) {
     themeIndex = index.clamp(0, kMuyuPalettes.length - 1);
     notifyListeners();
+    persistSession();
   }
 
   void signInWithToken(String token) {
     api.signInWithToken(token);
     notifyListeners();
+    persistSession();
     loadHome();
     loadLibrary();
+  }
+
+  /// 启动时恢复登录态；恢复后由调用方决定是否自动加载首页/曲库。
+  Future<void> restoreSession() async {
+    await local.load();
+    final snapshot = await _sessionStore.read();
+    if (snapshot == null) return;
+    if (snapshot.huaweiToken.isNotEmpty && snapshot.huaweiUserId.isNotEmpty) {
+      api.restoreSession(
+        musicToken: snapshot.huaweiToken,
+        snsUserId: snapshot.huaweiUserId,
+        accountToken: snapshot.huaweiAccountToken,
+        refreshToken: snapshot.huaweiAccountToken.isNotEmpty
+            ? snapshot.huaweiAccountToken
+            : null,
+        nick: snapshot.huaweiNickname,
+      );
+    }
+    if (snapshot.neteaseMusicU.isNotEmpty) {
+      netease.signInWithCookies(
+        snapshot.neteaseMusicU,
+        csrf: snapshot.neteaseCsrf,
+        nickname: snapshot.neteaseNickname,
+        userId: snapshot.neteaseUserId,
+      );
+    }
+    if (snapshot.kugouCookies.isNotEmpty) {
+      kugou.signInWithCookies(
+        Map<String, dynamic>.from(snapshot.kugouCookies),
+      );
+    }
+    if (snapshot.qqCookies.isNotEmpty) {
+      qq.signInWithCookies(Map<String, dynamic>.from(snapshot.qqCookies));
+    }
+    source = MusicSource.values.firstWhere(
+      (s) => s.name == snapshot.source,
+      orElse: () => MusicSource.huawei,
+    );
+    audio.source = source;
+    themeIndex = snapshot.themeIndex.clamp(0, kMuyuPalettes.length - 1);
+    notifyListeners();
+  }
+
+  /// 登录成功后落盘；凭证变化（401 自动换会话）也会回调到这里。
+  Future<void> persistSession() async {
+    await _sessionStore.write(SessionSnapshot(
+      source: source.name,
+      huaweiToken: api.gateway.session?.token ?? '',
+      huaweiUserId: api.gateway.session?.snsUserId ?? '',
+      huaweiAccountToken: api.gateway.accountToken ?? '',
+      huaweiNickname: api.displayName ?? '',
+      neteaseMusicU: netease.gateway.session?.musicU ?? '',
+      neteaseCsrf: netease.gateway.session?.csrf ?? '',
+      neteaseNickname: netease.gateway.session?.nickname ?? '',
+      neteaseUserId: netease.gateway.session?.userId ?? '',
+      kugouCookies: kugou.gateway.session?.cookies ?? const <String, String>{},
+      qqCookies: qq.gateway.session?.cookies ?? const <String, String>{},
+      themeIndex: themeIndex,
+    ));
   }
 
   void signOut() {
     api.signOut();
     netease.signOut();
+    kugou.signOut();
+    qq.signOut();
+    _sessionStore.clear();
     homeSongs = <Song>[];
     favorites = <Song>[];
     playlists = <Playlist>[];
@@ -525,12 +771,26 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 本地音乐导入：返回成功导入数量，错误写入 [error]。
+  Future<int> importLocalMusic() async {
+    final added = await local.importFromPicker();
+    if (local.error != null) error = local.error;
+    notifyListeners();
+    return added;
+  }
+
+  Future<void> removeLocalMusic(Song song) => local.remove(song);
+
   @override
   void dispose() {
     audio.removeListener(notifyListeners);
+    local.removeListener(notifyListeners);
+    local.dispose();
     audio.dispose();
     api.gateway.dispose();
     netease.gateway.dispose();
+    kugou.gateway.dispose();
+    qq.gateway.dispose();
     super.dispose();
   }
 }

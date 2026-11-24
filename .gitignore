@@ -46,3 +46,12 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# REA 原始样本 / 大体积字符串转储（保留 _syms_204.tsv 与结论文档）
+Muyu-*.exe
+rea_evidence/_strings_204.tsv
+rea_evidence/_gostrings_204.tsv
+rea_evidence/_regions/
+rea_evidence/_recent_turns.md
+rea_evidence/_uncommitted.diff
+rea_evidence/_strip.py

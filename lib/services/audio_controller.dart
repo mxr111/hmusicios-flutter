@@ -6,13 +6,18 @@ import 'package:flutter/foundation.dart';
 import '../models.dart';
 import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
+import '../protocol/kugou_api.dart';
 import '../protocol/netease_api.dart';
+import '../protocol/qq_api.dart';
 import 'lease_proxy.dart';
 
 /// 与沐语 MyGo audio.Player 对等：取流 → 租约代理 → 播放器。
 class MuyuAudioController extends ChangeNotifier {
-  MuyuAudioController(this.api, {NeteaseApi? netease})
-      : netease = netease ?? NeteaseApi() {
+  MuyuAudioController(this.api,
+      {NeteaseApi? netease, KugouApi? kugou, QqApi? qq})
+      : netease = netease ?? NeteaseApi(),
+        kugou = kugou ?? KugouApi(),
+        qq = qq ?? QqApi() {
     _player.onPositionChanged.listen((p) {
       position = p;
       _positionSampleAt = DateTime.now();
@@ -33,6 +38,8 @@ class MuyuAudioController extends ChangeNotifier {
 
   final HuaweiAPI api;
   final NeteaseApi netease;
+  final KugouApi kugou;
+  final QqApi qq;
   MusicSource source = MusicSource.huawei;
   final AudioPlayer _player = AudioPlayer();
 
@@ -103,10 +110,26 @@ class MuyuAudioController extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // 本地音乐：直接播放沙箱文件，不需要签名 / 租约代理。
+      final localPath = song.localPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        LeaseProxy.instance.revoke();
+        await _player.stop();
+        await _player.setVolume(volume);
+        await _player.play(DeviceFileSource(localPath));
+        return;
+      }
       // 档位由上游决定：把 Song 从上游字段解析出的档位集合传给取流层。
-      final List<HuaweiAudioFile> files = source == MusicSource.netease
-          ? await netease.audioFiles(song, quality: quality)
-          : await api.audioFiles(song.id, upstreamQualities: song.qualities);
+      final List<HuaweiAudioFile> files = switch (source) {
+        MusicSource.netease => await netease.audioFiles(song, quality: quality),
+        MusicSource.kugou => await kugou.audioFiles(song),
+        MusicSource.qq => await qq.audioFiles(song),
+        MusicSource.huawei =>
+          await api.audioFiles(song.id, upstreamQualities: song.qualities),
+      };
+      if (files.isEmpty) {
+        throw StateError('该音源未返回可播放地址');
+      }
       final supported = files.isNotEmpty ? files.map((f) => f.quality).toSet() : song.qualities;
       final wanted = supported.contains(quality)
           ? quality

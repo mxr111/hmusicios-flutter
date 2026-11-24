@@ -6,8 +6,10 @@ import 'services/app_state.dart';
 import 'widgets/netease_login_sheet.dart';
 import 'theme.dart';
 import 'widgets/home_page.dart';
+import 'widgets/kugou_login_sheet.dart';
 import 'widgets/netease_home_page.dart';
 import 'widgets/player_bar.dart';
+import 'widgets/qq_login_sheet.dart';
 import 'widgets/sidebar.dart';
 
 void main() {
@@ -28,8 +30,19 @@ class _MuyuAppState extends State<MuyuApp> {
   @override
   void initState() {
     super.initState();
-    // 未登录时不发请求，直接呈现离线占位界面（与截图一致）
-    if (_state.isLoggedIn) _state.loadHome();
+    _bootstrap();
+  }
+
+  /// 先恢复上次登录态，再加载首页/曲库；恢复失败也保持离线界面可用。
+  Future<void> _bootstrap() async {
+    try {
+      await _state.restoreSession();
+    } catch (_) {
+      // 本地会话损坏时按未登录启动，不阻塞界面。
+    }
+    if (!mounted || !_state.isLoggedIn) return;
+    await _state.loadHome();
+    await _state.loadLibrary();
   }
 
   @override
@@ -70,6 +83,7 @@ class AppShell extends StatelessWidget {
             Sidebar(
               state: state,
               onSettings: () => _openSettings(context),
+              onLocalMusic: () => _openLocalMusic(context),
             ),
           Expanded(child: _content(context)),
         ],
@@ -134,6 +148,7 @@ class AppShell extends StatelessWidget {
           state: state,
           onLogin: () => _login(context),
           onSettings: () => _openSettings(context),
+          onLocalMusic: () => _openLocalMusic(context),
         );
       default:
         return state.source == MusicSource.netease
@@ -149,9 +164,12 @@ class AppShell extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => state.source == MusicSource.netease
-          ? NeteaseLoginSheet(state: state)
-          : LoginSheet(state: state),
+      builder: (_) => switch (state.source) {
+        MusicSource.netease => NeteaseLoginSheet(state: state),
+        MusicSource.kugou => KugouLoginSheet(state: state),
+        MusicSource.qq => QqLoginSheet(state: state),
+        MusicSource.huawei => LoginSheet(state: state),
+      },
     );
   }
 
@@ -162,6 +180,14 @@ class AppShell extends StatelessWidget {
           state: state,
           onLogin: () => _login(context),
         ),
+      ),
+    );
+  }
+
+  void _openLocalMusic(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LocalMusicPage(state: state),
       ),
     );
   }

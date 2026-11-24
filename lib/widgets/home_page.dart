@@ -139,7 +139,7 @@ class _HomePageState extends State<HomePage> {
       children: [
         const Text('主页', style: MuyuTheme.title),
         const SizedBox(width: 16),
-        SourceSwitcher(state: state),
+        Flexible(child: SourceSwitcher(state: state)),
         const Spacer(),
         OutlinedButton.icon(
           onPressed: () {},
@@ -210,17 +210,18 @@ class _HomePageState extends State<HomePage> {
   void _playCard(String action) => widget.state.playCard(action);
 }
 
-/// 顶部音源切换：截图里「华为音乐」蓝色胶囊 + 酷狗 K / QQ音乐 / 网易云 圆标。
-/// 按需求只接通华为音乐，其余置灰提示。
+/// 顶部音源切换：华为 / 网易云 / 酷狗 / QQ 四个真实音源。
 class SourceSwitcher extends StatelessWidget {
   const SourceSwitcher({super.key, required this.state});
   final AppState state;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
         _sourceChip(
           label: '华为音乐',
           icon: Icons.graphic_eq,
@@ -237,14 +238,23 @@ class SourceSwitcher extends StatelessWidget {
           onTap: () => state.switchSource(MusicSource.netease),
         ),
         const SizedBox(width: 8),
-        ...<_SourceDotData>[
-          const _SourceDotData('K', Color(0xFF3B82F6)),
-          const _SourceDotData('Q', Color(0xFFFACC15)),
-        ].map((d) => Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: _SourceDot(data: d),
-            )),
-      ],
+        _sourceChip(
+          label: '酷狗',
+          icon: Icons.music_note,
+          color: const Color(0xFF3B82F6),
+          selected: state.source == MusicSource.kugou,
+          onTap: () => state.switchSource(MusicSource.kugou),
+        ),
+        const SizedBox(width: 8),
+        _sourceChip(
+          label: 'QQ',
+          icon: Icons.music_note,
+          color: const Color(0xFFFACC15),
+          selected: state.source == MusicSource.qq,
+          onTap: () => state.switchSource(MusicSource.qq),
+        ),
+        ],
+      ),
     );
   }
 
@@ -277,41 +287,6 @@ class SourceSwitcher extends StatelessWidget {
                     color: color,
                     fontWeight: FontWeight.w700)),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SourceDotData {
-  const _SourceDotData(this.label, this.color);
-  final String label;
-  final Color color;
-}
-
-class _SourceDot extends StatelessWidget {
-  const _SourceDot({required this.data});
-  final _SourceDotData data;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: '该音源未接入（本项目实现华为音乐 + 网易云音乐）',
-      child: Opacity(
-        opacity: 0.45,
-        child: Container(
-          width: 22,
-          height: 22,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: data.color.withValues(alpha: 0.28),
-            shape: BoxShape.circle,
-          ),
-          child: Text(data.label,
-              style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: data.color.withValues(alpha: 0.9))),
         ),
       ),
     );

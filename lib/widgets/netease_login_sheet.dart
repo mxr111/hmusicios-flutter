@@ -63,6 +63,7 @@ class _NeteaseLoginSheetState extends State<NeteaseLoginSheet> {
       if (!mounted) return;
       if (r.status == 803 && r.session != null) {
         _poller?.cancel();
+        await widget.state.persistSession();
         if (mounted) Navigator.pop(context);
         widget.state.refresh();
         widget.state.loadHome();
@@ -178,6 +179,7 @@ class _NeteaseLoginSheetState extends State<NeteaseLoginSheet> {
               Navigator.pop(ctx);
               if (value.isNotEmpty) {
                 widget.state.netease.signInWithCookies(value);
+                widget.state.persistSession();
                 _poller?.cancel();
                 Navigator.pop(context);
                 widget.state.refresh();

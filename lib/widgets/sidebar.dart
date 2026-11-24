@@ -7,10 +7,16 @@ import 'common.dart';
 /// 左侧栏：截图里的用户区 / 主页 / 音乐厅 / 唱片架 / 我的 /
 /// 自定义入口 / 本地音乐。选中项有蓝色竖条与浅蓝底。
 class Sidebar extends StatelessWidget {
-  const Sidebar({super.key, required this.state, required this.onSettings});
+  const Sidebar({
+    super.key,
+    required this.state,
+    required this.onSettings,
+    this.onLocalMusic,
+  });
 
   final AppState state;
   final VoidCallback onSettings;
+  final VoidCallback? onLocalMusic;
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +53,7 @@ class Sidebar extends StatelessWidget {
   }
 
   Widget _userHeader() {
-    final name = state.api.displayName ?? '土豆';
+    final name = state.isLoggedIn ? state.accountName : '土豆';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Row(
@@ -170,21 +176,33 @@ class Sidebar extends StatelessWidget {
   Widget _localMusic() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Container(
-        height: 36,
-        padding: const EdgeInsets.only(left: 10),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Row(
-          children: [
-            Icon(Icons.folder_open_outlined,
-                size: 16, color: MuyuColors.inkMuted),
-            SizedBox(width: 11),
-            Text('本地音乐',
-                style: TextStyle(fontSize: 12, color: MuyuColors.inkMuted)),
-          ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onLocalMusic,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.only(left: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.folder_open_outlined,
+                  size: 16, color: MuyuColors.inkMuted),
+              const SizedBox(width: 11),
+              const Text('本地音乐',
+                  style: TextStyle(fontSize: 12, color: MuyuColors.inkMuted)),
+              const Spacer(),
+              if (state.local.songs.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text('${state.local.songs.length}',
+                      style: const TextStyle(
+                          fontSize: 11, color: MuyuColors.inkMuted)),
+                ),
+            ],
+          ),
         ),
       ),
     );

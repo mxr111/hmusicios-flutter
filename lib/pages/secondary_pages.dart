@@ -21,6 +21,7 @@ class SearchPage extends StatefulWidget {
 
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _controller = TextEditingController();
+  int _resultTab = 0;
 
   @override
   void initState() {
@@ -63,25 +64,139 @@ class _SearchPageState extends State<SearchPage> {
             const LinearProgressIndicator(minHeight: 2)
           else if (state.error != null)
             StatePanel(message: state.error!, onRetry: () => state.doSearch(_controller.text))
-          else if (state.searchResults.isEmpty)
+          else if (state.searchResults.isEmpty &&
+              state.searchArtists.isEmpty &&
+              state.searchAlbums.isEmpty)
             const Text('输入关键词开始搜索华为音乐曲库', style: MuyuTheme.muted)
-          else
+          else ...[
+            _resultTabs(state),
+            const SizedBox(height: 12),
             Expanded(
-              child: ListView.builder(
-                itemCount: state.searchResults.length,
-                itemBuilder: (context, i) => SongRow(
-                  song: state.searchResults[i],
-                  index: i,
-                  onPlay: () => state.play(state.searchResults[i],
-                      queue: state.searchResults),
-                  onFavorite: () => state.toggleFavorite(state.searchResults[i]),
-                  onArtistTap: () =>
-                      state.openArtistFromSong(state.searchResults[i]),
-                ),
-              ),
+              child: switch (_resultTab) {
+                1 => _artistResults(state),
+                2 => _albumResults(state),
+                _ => _songResults(state),
+              },
             ),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _resultTabs(AppState state) {
+    return Row(
+      children: [
+        _tabChip('歌曲 ${state.searchResults.length}', 0),
+        const SizedBox(width: 8),
+        _tabChip('歌手 ${state.searchArtists.length}', 1),
+        const SizedBox(width: 8),
+        _tabChip('专辑 ${state.searchAlbums.length}', 2),
+      ],
+    );
+  }
+
+  Widget _tabChip(String label, int index) {
+    final selected = _resultTab == index;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => setState(() => _resultTab = index),
+      labelStyle: TextStyle(
+        fontSize: 12,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        color: selected ? Colors.white : MuyuColors.inkMuted,
+      ),
+      selectedColor: MuyuColors.accent,
+      backgroundColor: Colors.white,
+      side: BorderSide(color: MuyuColors.divider),
+      showCheckmark: false,
+    );
+  }
+
+  Widget _songResults(AppState state) {
+    if (state.searchResults.isEmpty) {
+      return const StatePanel(message: '搜索接口未返回歌曲。');
+    }
+    return ListView.builder(
+      itemCount: state.searchResults.length,
+      itemBuilder: (context, i) => SongRow(
+        song: state.searchResults[i],
+        index: i,
+        onPlay: () => state.play(state.searchResults[i],
+            queue: state.searchResults),
+        onFavorite: () => state.toggleFavorite(state.searchResults[i]),
+        onArtistTap: () => state.openArtistFromSong(state.searchResults[i]),
+      ),
+    );
+  }
+
+  Widget _artistResults(AppState state) {
+    if (state.searchArtists.isEmpty) {
+      return const StatePanel(message: '该搜索接口暂未返回歌手结果；可先搜索歌曲，再从歌曲行进入歌手。');
+    }
+    return ListView.separated(
+      itemCount: state.searchArtists.length,
+      separatorBuilder: (_, _) => Divider(height: 1, color: MuyuColors.divider),
+      itemBuilder: (context, i) {
+        final artist = state.searchArtists[i];
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+          leading: CoverArt(url: artist.cover, size: 46, circle: true, seed: i),
+          title: Text(artist.name, style: MuyuTheme.body),
+          subtitle: artist.desc.isEmpty
+              ? null
+              : Text(artist.desc,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: MuyuTheme.muted),
+          trailing: const Icon(Icons.chevron_right, size: 18),
+          onTap: () => state.openArtist(artist.id, name: artist.name),
+        );
+      },
+    );
+  }
+
+  Widget _albumResults(AppState state) {
+    if (state.searchAlbums.isEmpty) {
+      return const StatePanel(message: '该搜索接口暂未返回专辑结果。');
+    }
+    return GridView.builder(
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : 3,
+        childAspectRatio: 0.82,
+        mainAxisSpacing: 14,
+        crossAxisSpacing: 14,
+      ),
+      itemCount: state.searchAlbums.length,
+      itemBuilder: (context, i) {
+        final album = state.searchAlbums[i];
+        return GestureDetector(
+          onTap: () => state.openPlaylist(album),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, box) => CoverArt(
+                    url: album.cover,
+                    size: box.maxWidth,
+                    radius: 12,
+                    seed: i,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(album.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+              Text('${album.songCount} 首', style: MuyuTheme.muted),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -212,11 +327,18 @@ class ShelfPage extends StatelessWidget {
 
 /// 我的：收藏 / 歌单 / 登录状态
 class MinePage extends StatelessWidget {
-  const MinePage({super.key, required this.state, required this.onLogin, this.onSettings});
+  const MinePage({
+    super.key,
+    required this.state,
+    required this.onLogin,
+    this.onSettings,
+    this.onLocalMusic,
+  });
 
   final AppState state;
   final VoidCallback onLogin;
   final VoidCallback? onSettings;
+  final VoidCallback? onLocalMusic;
 
   @override
   Widget build(BuildContext context) {
@@ -250,15 +372,14 @@ class MinePage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      state.api.displayName ??
-                          (state.isLoggedIn ? '华为音乐用户' : '未登录'),
+                      state.accountName,
                       style: const TextStyle(
                           fontSize: 15, fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       state.isLoggedIn
-                          ? '已连接华为音乐'
+                          ? '已连接${state.source.label}'
                           : '登录后可同步收藏与歌单',
                       style: MuyuTheme.muted,
                     ),
@@ -273,6 +394,18 @@ class MinePage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
+        ListTile(
+          leading: const Icon(Icons.folder_open_outlined),
+          title: const Text('本地音乐', style: MuyuTheme.body),
+          subtitle: Text(
+            state.local.songs.isEmpty
+                ? '导入本机音频，读取内嵌封面与标签'
+                : '已导入 ${state.local.songs.length} 首',
+            style: MuyuTheme.muted,
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onLocalMusic,
+        ),
         if (onSettings != null)
           ListTile(
             leading: const Icon(Icons.settings_outlined),
@@ -589,6 +722,7 @@ class _LoginSheetState extends State<LoginSheet> {
       return;
     }
     widget.state.api.signInWithSession(_token.text, _userId.text);
+    widget.state.persistSession();
     Navigator.pop(context);
     widget.state.refresh();
     widget.state.loadHome();
@@ -961,6 +1095,121 @@ class _FavoriteListState extends State<_FavoriteList> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// 本地音乐：导入系统里的音频文件，读取内嵌标签后加入本机曲库。
+/// 对应原版 internal/localmedia + native_local*.go；不扫描全盘，只处理用户主动选择的文件。
+class LocalMusicPage extends StatefulWidget {
+  const LocalMusicPage({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  State<LocalMusicPage> createState() => _LocalMusicPageState();
+}
+
+class _LocalMusicPageState extends State<LocalMusicPage> {
+  Future<void> _import() async {
+    final added = await widget.state.importLocalMusic();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(added > 0 ? '已导入 $added 首本地歌曲' : '未导入文件')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = widget.state;
+    final songs = state.local.songs;
+    return Scaffold(
+      backgroundColor: MuyuColors.background,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('本地音乐', style: MuyuTheme.title),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.file_open_outlined, size: 18),
+            label: const Text('导入'),
+            onPressed: state.local.loading ? null : _import,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              songs.isEmpty ? '还没有本地歌曲' : '共 ${songs.length} 首 · 全部保存在应用沙箱',
+              style: MuyuTheme.muted,
+            ),
+            const SizedBox(height: 14),
+            if (state.local.loading)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (songs.isEmpty)
+              StatePanel(
+                message: '支持 MP3 / FLAC / M4A / WAV 等格式；导入后读取 ID3v2 与 FLAC 内嵌标题、歌手、专辑。',
+                onRetry: _import,
+                actionLabel: '选择文件',
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: songs.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: MuyuColors.divider),
+                  itemBuilder: (context, i) {
+                    final song = songs[i];
+                    return ListTile(
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      leading: CoverArt(url: song.cover, size: 44, seed: i),
+                      title: Text(song.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        song.album.isEmpty
+                            ? song.artistText
+                            : '${song.artistText} · ${song.album}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MuyuTheme.muted,
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          QualityBadge(
+                            song.qualities.contains(AudioQuality.lossless)
+                                ? AudioQuality.lossless
+                                : AudioQuality.standard,
+                            small: true,
+                          ),
+                          IconButton(
+                            tooltip: '播放',
+                            icon: const Icon(Icons.play_circle_outline, size: 22),
+                            onPressed: () =>
+                                state.play(song, queue: songs),
+                          ),
+                          IconButton(
+                            tooltip: '从本地库移除',
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            onPressed: () => state.removeLocalMusic(song),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

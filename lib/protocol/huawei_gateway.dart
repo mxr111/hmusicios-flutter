@@ -51,6 +51,12 @@ class HuaweiGateway {
   /// OAuth 账号 access token（仅用于换音乐会话，不直接发业务请求）。
   String? accountToken;
 
+  /// 实测 refresh_token 不可用，但保留字段便于诊断与后续服务端策略变化。
+  String? refreshToken;
+
+  /// 会话变化回调：用于把新 token 持久化，避免重启后重新扫码。
+  void Function()? onSessionChanged;
+
   late final String deviceId = _newDeviceId();
 
   String _newDeviceId() =>
@@ -125,22 +131,37 @@ class HuaweiGateway {
     );
     session = s;
     accountToken = accessToken;
+    onSessionChanged?.call();
     return s;
   }
 
   /// 业务 POST（源码事实：所有业务接口用 POST/JSON）。
+  /// 音乐 token 失效时，用仍有效的账号 access token 自动换一次会话。
   Future<Map<String, dynamic>> request(
     String path, {
     Map<String, dynamic> body = const <String, dynamic>{},
-  }) async {
-    final raw = await _send(makeUrl(path), 'POST', body);
-    return _decode(raw, path);
-  }
+  }) =>
+      _withSessionRetry(() async {
+        final raw = await _send(makeUrl(path), 'POST', body);
+        return _decode(raw, path);
+      });
 
   /// GET（仅用于带 query 且源码明确 GET 的接口，如 favorite/exist、playlist/detail）。
-  Future<Map<String, dynamic>> get(String path) async {
-    final raw = await _send(makeUrl(path), 'GET', const <String, dynamic>{});
-    return _decode(raw, path);
+  Future<Map<String, dynamic>> get(String path) =>
+      _withSessionRetry(() async {
+        final raw = await _send(makeUrl(path), 'GET', const <String, dynamic>{});
+        return _decode(raw, path);
+      });
+
+  Future<T> _withSessionRetry<T>(Future<T> Function() work) async {
+    try {
+      return await work();
+    } on HuaweiException catch (e) {
+      final at = accountToken;
+      if (e.statusCode != 401 || at == null || at.isEmpty) rethrow;
+      await exchangeMusicToken(at);
+      return await work();
+    }
   }
 
   /// 取纯文本（歌词 LRC/HMRC）。歌词地址通常是完整 URL，需 allowlist 校验。
@@ -224,6 +245,8 @@ class HuaweiGateway {
     final at = firstString(json, const ['access_token']);
     if (at == null) throw const HuaweiException('授权码兑换未返回 access_token');
     accountToken = at;
+    refreshToken = firstString(json, const ['refresh_token']);
+    onSessionChanged?.call();
     return at;
   }
 

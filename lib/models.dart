@@ -5,7 +5,8 @@ enum MusicSourceLabel {
   huawei('华为', Color(0xFFE8406A), Icons.graphic_eq),
   netease('网易云', Color(0xFF9B2C2C), Icons.cloud_queue),
   kugou('酷狗', Color(0xFF3B82F6), Icons.music_note),
-  qq('QQ', Color(0xFFFACC15), Icons.music_note);
+  qq('QQ', Color(0xFFFACC15), Icons.music_note),
+  local('本地', Color(0xFF10B981), Icons.folder_open);
 
   const MusicSourceLabel(this.label, this.color, this.icon);
   final String label;
@@ -97,6 +98,7 @@ class Song {
     this.favorite = false,
     this.source = MusicSourceLabel.huawei,
     this.member = false,
+    this.localPath,
   });
 
   final String id;
@@ -114,6 +116,9 @@ class Song {
 
   /// 会员歌曲（沐语收藏页「会员」列的黄色钻石徽标）。
   final bool member;
+
+  /// 本地文件绝对路径；非空时播放器直接读本地文件，不经租约代理。
+  final String? localPath;
 
   String get artistText => artists.isEmpty ? '未知歌手' : artists.join(' / ');
 
