@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../models.dart';
@@ -53,7 +55,10 @@ class CoverArt extends StatelessWidget {
     final borderRadius = circle
         ? BorderRadius.circular(size / 2)
         : BorderRadius.circular(radius);
-    final dpr = (MediaQuery.maybeDevicePixelRatioOf(context) ?? 1).clamp(1.0, 3.0);
+    final dpr = (MediaQuery.maybeDevicePixelRatioOf(context) ?? 1).clamp(
+      1.0,
+      3.0,
+    );
     final child = url == null
         ? placeholder
         : Image.network(
@@ -71,48 +76,146 @@ class CoverArt extends StatelessWidget {
   }
 }
 
-/// 黑胶唱片封面：截图里播放条左侧的旋转圆形封面
-class VinylCover extends StatelessWidget {
-  const VinylCover({super.key, this.url, this.size = 48, this.spinning = false});
+/// 黑胶唱片封面：唱片纹路与封面一起旋转，播放时轻微呼吸。
+class VinylCover extends StatefulWidget {
+  const VinylCover({
+    super.key,
+    this.url,
+    this.size = 48,
+    this.spinning = false,
+  });
 
   final Uri? url;
   final double size;
   final bool spinning;
 
   @override
+  State<VinylCover> createState() => _VinylCoverState();
+}
+
+class _VinylCoverState extends State<VinylCover>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _turns = AnimationController.unbounded(
+    vsync: this,
+    duration: const Duration(seconds: 18),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _startSpin();
+  }
+
+  @override
+  void didUpdateWidget(covariant VinylCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.spinning != widget.spinning) {
+      if (widget.spinning) {
+        _startSpin();
+      } else {
+        _turns.stop();
+      }
+    }
+  }
+
+  void _startSpin() {
+    // 从暂停时的角度继续，周期结束时只多转一整圈，因此不会跳回封面初始角度。
+    final start = _turns.value;
+    _turns.repeat(min: start, max: start + 1);
+  }
+
+  @override
+  void dispose() {
+    _turns.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final disc = Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: const RadialGradient(
-          colors: [Color(0xFF3A3A40), Color(0xFF101014)],
-          stops: [0.35, 1],
-        ),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.15)),
-      ),
-      child: Center(
-        child: ClipOval(
-          child: SizedBox(
-            width: size * 0.6,
-            height: size * 0.6,
-            child: CoverArt(
-              url: url,
-              size: size * 0.6,
-              circle: true,
-              seed: 2,
-            ),
+    final disc = RepaintBoundary(
+      child: ClipOval(
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: RadialGradient(
+                    colors: [Color(0xFF3A3A40), Color(0xFF101014)],
+                    stops: [0.35, 1],
+                  ),
+                ),
+                child: Center(
+                  child: ClipOval(
+                    child: SizedBox(
+                      width: widget.size * 0.6,
+                      height: widget.size * 0.6,
+                      child: CoverArt(
+                        url: widget.url,
+                        size: widget.size * 0.6,
+                        circle: true,
+                        seed: 2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              CustomPaint(painter: _VinylGroovesPainter()),
+            ],
           ),
         ),
       ),
     );
-    if (!spinning) return disc;
+    if (!widget.spinning) {
+      return RotationTransition(turns: _turns, child: disc);
+    }
     return RotationTransition(
-      turns: const AlwaysStoppedAnimation<double>(0.12),
-      child: disc,
+      turns: _turns,
+      child: AnimatedBuilder(
+        animation: _turns,
+        builder: (context, child) {
+          final pulse = 1.0 + 0.006 * math.sin(_turns.value * math.pi * 2);
+          return Transform.scale(scale: pulse, child: child);
+        },
+        child: disc,
+      ),
     );
   }
+}
+
+class _VinylGroovesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.shortestSide / 2;
+    final groove = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(0.55, radius * 0.006);
+
+    // 细密但低对比的压纹，让旋转在大封面上可感知，小尺寸下也不抢封面。
+    for (var i = 0; i < 7; i++) {
+      final t = i / 7;
+      groove.color = Colors.white.withValues(alpha: 0.035 + 0.012 * (i % 2));
+      canvas.drawCircle(center, radius * (0.33 + t * 0.16), groove);
+    }
+
+    final glint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.20)
+      ..strokeWidth = math.max(0.7, radius * 0.012)
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius * 0.46),
+      -math.pi * 0.82,
+      math.pi * 0.18,
+      false,
+      glint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _VinylGroovesPainter oldDelegate) => false;
 }
 
 class QualityBadge extends StatelessWidget {
@@ -136,7 +239,9 @@ class QualityBadge extends StatelessWidget {
     };
     return Container(
       padding: EdgeInsets.symmetric(
-          horizontal: small ? 4 : 6, vertical: small ? 1 : 2),
+        horizontal: small ? 4 : 6,
+        vertical: small ? 1 : 2,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
@@ -177,8 +282,10 @@ class SourceBadge extends StatelessWidget {
         ),
         if (!compact) ...[
           const SizedBox(width: 4),
-          Text(label,
-              style: const TextStyle(fontSize: 10, color: MuyuColors.accent)),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10, color: MuyuColors.accent),
+          ),
         ],
       ],
     );
@@ -253,26 +360,34 @@ class SongRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(song.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: fg)),
+                  Text(
+                    song.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: fg,
+                    ),
+                  ),
                   const SizedBox(height: 3),
                   GestureDetector(
                     onTap: onArtistTap,
                     child: Row(
                       children: [
-                        Icon(song.source.icon,
-                            size: 11, color: song.source.color),
+                        Icon(
+                          song.source.icon,
+                          size: 11,
+                          color: song.source.color,
+                        ),
                         const SizedBox(width: 4),
                         Expanded(
-                          child: Text(song.artistText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 12, color: muted)),
+                          child: Text(
+                            song.artistText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: muted),
+                          ),
                         ),
                       ],
                     ),
@@ -287,17 +402,21 @@ class SongRow extends StatelessWidget {
               ),
             if (showTags)
               Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: QualityBadge(
-                song.qualities.isEmpty
-                    ? AudioQuality.standard
-                    : song.qualities.reduce((a, b) => a.index > b.index ? a : b),
-                small: true,
-              ),
+                padding: const EdgeInsets.only(right: 6),
+                child: QualityBadge(
+                  song.qualities.isEmpty
+                      ? AudioQuality.standard
+                      : song.qualities.reduce(
+                          (a, b) => a.index > b.index ? a : b,
+                        ),
+                  small: true,
+                ),
               ),
             TinyIconButton(
               icon: song.favorite ? Icons.favorite : Icons.favorite_border,
-              color: song.favorite ? MuyuColors.primary : const Color(0xFF2AA560),
+              color: song.favorite
+                  ? MuyuColors.primary
+                  : const Color(0xFF2AA560),
               onTap: onFavorite ?? () {},
               tooltip: '收藏',
             ),
@@ -340,9 +459,7 @@ class StatePanel extends StatelessWidget {
         children: [
           const Icon(Icons.info_outline, size: 18, color: MuyuColors.inkMuted),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(message, style: MuyuTheme.body),
-          ),
+          Expanded(child: Text(message, style: MuyuTheme.body)),
           if (onRetry != null)
             TextButton(onPressed: onRetry, child: Text(actionLabel ?? '重试')),
         ],

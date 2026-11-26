@@ -114,6 +114,74 @@ void main() {
     state.dispose();
   });
 
+  testWidgets('首页五张卡使用各自栏目数据，不再复用同一首歌', (tester) async {
+    final state = AppState();
+    Song song(String name) => Song(
+          id: name,
+          name: name,
+          artists: const <String>['真实歌手'],
+        );
+    final recommended = List<Song>.generate(
+      5,
+      (i) => song('为你推荐$i'),
+    );
+    state.homeSongs = recommended;
+    state.discover = DiscoverData(
+      recommended: recommended,
+      listen: <Song>[song('现在就听曲')],
+      daily: <Song>[song('每日30首曲')],
+      heart: <Song>[song('心动模式曲')],
+      newSongs: <Song>[song('新歌推荐曲')],
+      hot: <Song>[song('热歌速递曲')],
+      features: <DiscoverFeature>[
+        const DiscoverFeature(
+          id: 'pfm001',
+          title: '现在就听',
+          serviceType: 'privatefm',
+        ),
+        const DiscoverFeature(
+          id: 'a001',
+          title: '每日30首',
+          serviceType: 'dailyrecommend',
+        ),
+        const DiscoverFeature(
+          id: 'pfm002',
+          title: '心动模式',
+          serviceType: 'heartbeatfm',
+        ),
+        const DiscoverFeature(
+          id: 'a003',
+          title: '新歌推荐',
+          serviceType: 'newsongrecommend',
+        ),
+        const DiscoverFeature(
+          id: 'a006',
+          title: '热歌速递',
+          serviceType: 'millionfavoriterecommend',
+        ),
+      ],
+    );
+
+    await tester.binding.setSurfaceSize(const Size(1460, 980));
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: Scaffold(body: HomePage(state: state)),
+    ));
+    await tester.pump();
+
+    expect(find.byType(HomeCard), findsNWidgets(5));
+    for (final name in const <String>[
+      '现在就听曲',
+      '每日30首曲',
+      '心动模式曲',
+      '新歌推荐曲',
+      '热歌速递曲',
+    ]) {
+      expect(find.textContaining(name), findsOneWidget);
+    }
+    state.dispose();
+  });
+
   testWidgets('点播放条进入全屏播放器，点歌词按钮进入歌词视图', (tester) async {
     final state = AppState();
     state.audio.current = Song(

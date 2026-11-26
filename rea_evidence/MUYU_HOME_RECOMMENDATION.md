@@ -76,3 +76,23 @@ Ghidra 反编译 `muyu.local/desktop/internal/gateway.(*Connection).RadioMode`
 
 生成的反编译全文（`home_decomp*.txt` / `radio_decomp.txt`）已加入 `.gitignore`，
 结论以本文件为准。
+
+## 5. 用户日志复核（2026-11-24 / 2026-11-26）
+
+- 11/26 08:55 启动后先出现 `990000`；OAuth 重新登录后 `page/detail/all` 成功
+  （514830B），随后只有一次 `musiclist/detail/bymusiclistid`（307684B，对应 a001）。
+  没有 a003 / a004 / a006 的请求，说明旧实现只拉了「每日30首」，其余卡片全部
+  fallback 到 `homeSongs.first`，所以用户看到「除了每日三十首其他都一样」。
+- 11/24 23:06 的日志在 5 秒内连续 20+ 次 `page/detail/all -> 990000`，
+  是鉴权失败后的自动重试风暴。
+
+本次修复：
+
+1. `parseDiscover` 解析 `recommend_for_you` 栏目里的 contentType=998 功能卡，
+   从 `contentExInfo.realContentInfo.extendInfo.serviceType` 取出
+   `privatefm / dailyrecommend / newsongrecommend / heartbeatfm /
+   millionfavoriterecommend / favoritesrecommend`。
+2. `AppState.loadHome` 按这些 serviceType 并发拉取 a001/a003/a004/a006，
+   分别填 `daily / newSongs / recommended,listen / heart / hot`，五张卡不再共用列表。
+3. `990000` / 「重新登录」错误进入 30 秒冷却，并加 `_homeLoading` 防并发重复请求；
+   用户主动点刷新会清空冷却。

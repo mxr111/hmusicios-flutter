@@ -85,6 +85,8 @@ class AppState extends ChangeNotifier {
   bool get darkMode => palette.dark; // 兼容旧 ThemeMode 逻辑
   int homePage = 1;
   int _homeRefreshSeed = 0;
+  bool _homeLoading = false;
+  DateTime? _homeRetryBlockedUntil;
 
   /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
   PlayerStyle playerStyle = PlayerStyle.modern;
@@ -186,38 +188,110 @@ class AppState extends ChangeNotifier {
       await loadQqHome();
       return;
     }
-    await _guard(() async {
-      var data = await api.discover();
-      // 首页聚合接口偶发返回空结构：改用推荐歌单/榜单两个独立服务兜底，
-      // 仍是真实接口数据，不填假歌。
-      if (data.newSongs.isEmpty &&
-          data.playlists.isEmpty &&
-          data.charts.isEmpty &&
-          data.radio.isEmpty) {
-        final lists = await _soft(api.recommendedPlaylists(), <Playlist>[]);
-        final charts = await _soft(api.charts(), <Playlist>[]);
-        if (lists.isNotEmpty || charts.isNotEmpty) {
-          data = DiscoverData(playlists: lists, charts: charts);
+    if (_homeLoading) return;
+    final now = DateTime.now();
+    if (_homeRetryBlockedUntil != null && now.isBefore(_homeRetryBlockedUntil!)) {
+      return;
+    }
+    _homeLoading = true;
+    try {
+      await _guard(() async {
+        var data = await api.discover();
+        if (data.features.isNotEmpty) {
+          data = await _hydrateHomeFeatures(data);
         }
-      }
-      discover = _rotateDiscover(data);
-      // 「为你推荐」是独立私享好歌流，不再拿「新歌推荐」冒充。
-      homeSongs = discover.recommended.isNotEmpty
-          ? discover.recommended
-          : (discover.radio.isNotEmpty
-              ? discover.radio
-              : discover.newSongs);
-      playlists = discover.playlists;
-      charts = discover.charts;
-      discoverLoaded = true;
-    });
+        // 首页聚合接口偶发返回空结构：改用推荐歌单/榜单两个独立服务兜底，
+        // 仍是真实接口数据，不填假歌。
+        if (data.newSongs.isEmpty &&
+            data.playlists.isEmpty &&
+            data.charts.isEmpty &&
+            data.radio.isEmpty) {
+          final lists = await _soft(api.recommendedPlaylists(), <Playlist>[]);
+          final charts = await _soft(api.charts(), <Playlist>[]);
+          if (lists.isNotEmpty || charts.isNotEmpty) {
+            data = DiscoverData(playlists: lists, charts: charts);
+          }
+        }
+        discover = _rotateDiscover(data);
+        // 「为你推荐」是独立私享好歌流，不再拿「新歌推荐」冒充。
+        homeSongs = discover.recommended.isNotEmpty
+            ? discover.recommended
+            : (discover.radio.isNotEmpty
+                ? discover.radio
+                : discover.newSongs);
+        playlists = discover.playlists;
+        charts = discover.charts;
+        discoverLoaded = true;
+      });
+    } finally {
+      _homeLoading = false;
+    }
   }
 
   /// 首页「刷新」：服务端同一账号的推荐接口目前返回同一批内容，
   /// 这里在真实数据上做确定性的轮换，保证每次刷新首屏会变化。
   Future<void> refreshHome() async {
+    _homeRetryBlockedUntil = null;
     _homeRefreshSeed++;
     await loadHome();
+  }
+
+  /// 首页 6 张功能卡分别有自己的真实曲库。日志里「除了每日30首其他都一样」
+  /// 的根因是旧实现只拿到新歌列表，其余卡片全 fallback 到 homeSongs.first。
+  /// 这里按 serviceType 并发拉取 a001/a003/a004/a006，互不复用。
+  Future<DiscoverData> _hydrateHomeFeatures(DiscoverData data) async {
+    String idFor(String serviceType, String fallback) {
+      for (final feature in data.features) {
+        if (feature.serviceType == serviceType && feature.id.isNotEmpty) {
+          return feature.id;
+        }
+      }
+      return fallback;
+    }
+
+    Future<List<Song>> fetch(String id) => _soft(
+          api.playlistSongs(
+            Playlist(id: id, name: id, kind: 'collected'),
+            fetchAll: false,
+            limit: 30,
+          ),
+          <Song>[],
+        );
+
+    final ids = <String>[
+      idFor('dailyrecommend', 'a001'),
+      idFor('newsongrecommend', 'a003'),
+      idFor('favoritesrecommend', 'a004'),
+      idFor('millionfavoriterecommend', 'a006'),
+    ];
+    final results = await Future.wait<List<Song>>(
+      ids.map(fetch).toList(),
+    );
+    final daily = results[0];
+    final news = results[1];
+    final personal = results[2];
+    final hot = results[3];
+    final recommended = personal.isNotEmpty
+        ? personal
+        : (hot.isNotEmpty ? hot : (daily.isNotEmpty ? daily : data.recommended));
+    final listen = personal.isNotEmpty
+        ? personal
+        : (hot.isNotEmpty ? hot : (daily.isNotEmpty ? daily : data.listen));
+    final heart = personal.isNotEmpty && hot.isNotEmpty
+        ? hot
+        : (daily.isNotEmpty ? daily : data.heart);
+    final newSongs = news.isNotEmpty ? news : data.newSongs;
+    final hotSongs = hot.isNotEmpty ? hot : data.hot;
+
+    return data.copyWith(
+      daily: daily,
+      newSongs: newSongs,
+      recommended: recommended,
+      listen: listen,
+      heart: heart,
+      hot: hotSongs,
+      features: data.features,
+    );
   }
 
   DiscoverData _rotateDiscover(DiscoverData data) {
@@ -234,6 +308,8 @@ class AppState extends ChangeNotifier {
       heart: _rotate(data.heart),
       hot: data.hot,
       recommendedColumnId: data.recommendedColumnId,
+      features: data.features,
+      daily: _rotate(data.daily),
     );
   }
 
@@ -918,6 +994,12 @@ class AppState extends ChangeNotifier {
       await work();
     } catch (e) {
       error = e.toString();
+      if (error!.contains('990000') || error!.contains('重新登录')) {
+        // 日志里 990000 会在 5 秒内连打 20 次首页请求；鉴权失败时
+        // 冷却 30 秒，等待用户重新登录，不再自动风暴重试。
+        _homeRetryBlockedUntil =
+            DateTime.now().add(const Duration(seconds: 30));
+      }
       AppLog.add('state', error!);
       onError?.call(error!);
     } finally {

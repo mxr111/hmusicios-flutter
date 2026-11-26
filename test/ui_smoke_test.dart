@@ -7,6 +7,7 @@ import 'package:muyu_flutter/pages/secondary_pages.dart';
 import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/theme.dart';
 import 'package:muyu_flutter/widgets/discover_page.dart';
+import 'package:muyu_flutter/widgets/common.dart';
 import 'package:muyu_flutter/widgets/immersive_player.dart';
 import 'package:muyu_flutter/widgets/netease_home_page.dart';
 
@@ -74,6 +75,52 @@ void main() {
       expect(find.byIcon(Icons.skip_previous), findsOneWidget,
           reason: '${style.label} 缺少播控');
     }
+    state.dispose();
+  });
+
+  testWidgets('黑胶封面播放时有旋转且动画随时间推进', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Center(child: VinylCover(spinning: true)),
+      ),
+    ));
+
+    final rotation = find.descendant(
+      of: find.byType(VinylCover),
+      matching: find.byType(RotationTransition),
+    );
+    final before = tester
+        .widget<RotationTransition>(rotation)
+        .turns
+        .value;
+    await tester.pump(const Duration(milliseconds: 500));
+    final after = tester
+        .widget<RotationTransition>(rotation)
+        .turns
+        .value;
+
+    expect(after, isNot(before));
+  });
+
+  testWidgets('歌词样式面板支持 +100ms 同步校准', (tester) async {
+    final state = AppState();
+    await tester.pumpWidget(MaterialApp(
+      theme: MuyuTheme.light(),
+      home: Scaffold(body: ImmersivePlayer(state: state)),
+    ));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('歌词样式'));
+    await tester.pumpAndSettle();
+    expect(find.text('歌词同步'), findsOneWidget);
+    expect(state.audio.lyricOffset, Duration.zero);
+
+    await tester.ensureVisible(find.byTooltip('歌词提前 100ms'));
+    await tester.tap(find.byTooltip('歌词提前 100ms'));
+    await tester.pump();
+
+    expect(state.audio.lyricOffset, const Duration(milliseconds: 100));
+    expect(find.text('当前偏移 +100 ms'), findsOneWidget);
     state.dispose();
   });
 

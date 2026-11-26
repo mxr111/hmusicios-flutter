@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
@@ -191,6 +193,51 @@ void main() {
     ]);
   });
 
+  test('首页 998 功能卡解析出 serviceType / 真实栏目ID / 封面', () {
+    final contentExInfo = jsonEncode(<String, dynamic>{
+      'realContentInfo': <String, dynamic>{
+        'contentID': 'a001',
+        'contentName': '每日30首',
+        'contentType': '4',
+        'extendInfo': jsonEncode(<String, dynamic>{
+          'serviceType': 'dailyrecommend',
+        }),
+      },
+    });
+    final d = HuaweiAPI.parseDiscover(<String, dynamic>{
+      'result': <String, dynamic>{
+        'columnInfoExs': <dynamic>[
+          <String, dynamic>{
+            'columnInfo': <String, dynamic>{
+              'columnKey': 'recommend_for_you',
+              'contentID': 'NokMgDwyY3Y-i_Gln',
+              'contentName': '今日为你推荐',
+              'contentType': '998',
+            },
+            'contentSimpleInfos': <dynamic>[
+              <String, dynamic>{
+                'contentType': '998',
+                'contentID': 'card-daily',
+                'contentName': '每日30首',
+                'contentExInfo': contentExInfo,
+                'picture': <String, dynamic>{
+                  'bigImgURL':
+                      'https://contentcenter-drcn.dbankcdn.cn/img/daily.jpg',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(d.features, hasLength(1));
+    expect(d.features.single.serviceType, 'dailyrecommend');
+    expect(d.features.single.id, 'a001');
+    expect(d.features.single.title, '每日30首');
+    expect(d.features.single.cover.toString(), contains('dbankcdn.cn'));
+    expect(d.daily, isEmpty);
+  });
+
   test('parseSong 解析 artistNamePairs 的歌手名与 ID（REA HomeSongs 字段）', () {
     final s = HuaweiAPI.parseSong(<String, dynamic>{
       'contentID': 'song-with-artist',
@@ -244,6 +291,8 @@ void main() {
     expect(d.listen, isEmpty);
     expect(d.heart, isEmpty);
     expect(d.hot, isEmpty);
+    expect(d.daily, isEmpty);
+    expect(d.features, isEmpty);
   });
 
   upstreamQualityTests();

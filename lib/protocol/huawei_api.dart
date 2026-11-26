@@ -21,6 +21,8 @@ class DiscoverData {
     this.heart = const <Song>[],
     this.hot = const <Song>[],
     this.recommendedColumnId,
+    this.features = const <DiscoverFeature>[],
+    this.daily = const <Song>[],
   });
 
   final List<DiscoverBanner> banners;
@@ -38,6 +40,8 @@ class DiscoverData {
   final List<Song> heart;
   final List<Song> hot;
   final String? recommendedColumnId;
+  final List<DiscoverFeature> features;
+  final List<Song> daily;
 
   DiscoverData copyWith({
     List<DiscoverBanner>? banners,
@@ -51,6 +55,8 @@ class DiscoverData {
     List<Song>? heart,
     List<Song>? hot,
     String? recommendedColumnId,
+    List<DiscoverFeature>? features,
+    List<Song>? daily,
   }) {
     return DiscoverData(
       banners: banners ?? this.banners,
@@ -64,8 +70,25 @@ class DiscoverData {
       heart: heart ?? this.heart,
       hot: hot ?? this.hot,
       recommendedColumnId: recommendedColumnId ?? this.recommendedColumnId,
+      features: features ?? this.features,
+      daily: daily ?? this.daily,
     );
   }
+}
+
+/// 首页 contentType=998 的功能卡（现在就听/每日30首/心动模式/新歌推荐/热歌速递/私藏馆）。
+class DiscoverFeature {
+  const DiscoverFeature({
+    required this.id,
+    required this.title,
+    required this.serviceType,
+    this.cover,
+  });
+
+  final String id;
+  final String title;
+  final String serviceType;
+  final Uri? cover;
 }
 
 class DiscoverBanner {
@@ -1541,6 +1564,9 @@ class HuaweiAPI {
     // 运行时实测：首页聚合接口必须 GET；POST 返回 405。
     final json = await gateway.get(HuaweiPaths.home);
     final data = parseDiscover(json);
+    // 2.0.4 真实首页把 6 个入口放在 contentType=998 功能卡里；
+    // 有功能卡时不要再请求 8011 空栏目，交给上层按 a001/a003/a004/a006 拉各自曲库。
+    if (data.features.isNotEmpty) return data;
     if (data.recommended.isEmpty && data.recommendedColumnId != null) {
       final extra = await _fetchRecommendationColumn(data.recommendedColumnId!);
       if (extra.isNotEmpty) {
@@ -1697,6 +1723,7 @@ class HuaweiAPI {
     final albums = <Playlist>[];
     final radio = <Song>[];
     final banners = <DiscoverBanner>[];
+    final features = <DiscoverFeature>[];
     String? recommendedColumnId;
 
     void addSong(Song song, String label) {
@@ -1768,6 +1795,10 @@ class HuaweiAPI {
               addSongMap(item, label);
             }
             break;
+          case '998':
+            final feature = _featureFrom(content);
+            if (feature != null) features.add(feature);
+            break;
           default:
             // 仅当明确带 listRcmInfos（电台推荐）时才取歌。
             final radioInfos = _findNamedList(content, 'listRcmInfos');
@@ -1824,6 +1855,8 @@ class HuaweiAPI {
       heart: heart.isNotEmpty ? heart.take(30).toList() : radioSongs,
       hot: hot.take(10).toList(),
       recommendedColumnId: recommendedColumnId ?? '8011',
+      features: features,
+      daily: const <Song>[],
     );
   }
 
@@ -1873,10 +1906,67 @@ class HuaweiAPI {
     }
   }
 
+  static DiscoverFeature? _featureFrom(Map<String, dynamic> content) {
+    final title = HuaweiGateway.firstString(
+          content,
+          const ['contentName', 'keyName', 'name', 'title'],
+        ) ??
+        '';
+    String? serviceType;
+    String id = '';
+    String realTitle = title;
+    final rawInfo = content['contentExInfo'];
+    Map<String, dynamic>? info;
+    if (rawInfo is Map) {
+      info = Map<String, dynamic>.from(rawInfo);
+    } else if (rawInfo is String && rawInfo.trim().startsWith('{')) {
+      try {
+        final decoded = jsonDecode(rawInfo);
+        if (decoded is Map) info = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    final real = info?['realContentInfo'];
+    if (real is Map) {
+      final map = Map<String, dynamic>.from(real);
+      id = HuaweiGateway.firstString(
+            map,
+            const ['contentID', 'contentId', 'id'],
+          ) ??
+          '';
+      realTitle = HuaweiGateway.firstString(
+            map,
+            const ['contentName', 'keyName', 'name', 'title'],
+          ) ??
+          realTitle;
+      final extend = map['extendInfo'];
+      if (extend is Map) {
+        serviceType = HuaweiGateway.firstString(
+          Map<String, dynamic>.from(extend),
+          const ['serviceType'],
+        );
+      } else if (extend is String && extend.trim().startsWith('{')) {
+        try {
+          final decoded = jsonDecode(extend);
+          if (decoded is Map) {
+            serviceType = HuaweiGateway.firstString(
+              Map<String, dynamic>.from(decoded),
+              const ['serviceType'],
+            );
+          }
+        } catch (_) {}
+      }
+    }
+    if (id.isEmpty && title.isEmpty) return null;
+    return DiscoverFeature(
+      id: id,
+      title: realTitle.isEmpty ? title : realTitle,
+      serviceType: serviceType ?? '',
+      cover: coverOf(content),
+    );
+  }
+
   static bool _isRecommendedLabel(String label) =>
       label.contains('recom_exclusive') ||
-      label.contains('recommended') ||
-      label.contains('recommend') ||
       label.contains('私享好歌') ||
       label.contains('为你推荐');
 
@@ -1908,7 +1998,13 @@ class HuaweiAPI {
     if (info is Map) maps.add(Map<String, dynamic>.from(info));
     maps.add(column);
     for (final map in maps) {
-      for (final key in const <String>['columnId', 'columnID', 'id']) {
+      for (final key in const <String>[
+        'columnId',
+        'columnID',
+        'contentID',
+        'contentId',
+        'id',
+      ]) {
         final value = map[key];
         if (value is String &&
             value.isNotEmpty &&
@@ -1996,6 +2092,12 @@ class HuaweiAPI {
     }
     return const <Map<String, dynamic>>[];
   }
+
+  /// Opt-in live probe helper: inspect a named list without reimplementing
+  /// Huawei's nested envelope in test code.
+  static List<Map<String, dynamic>> debugFindNamedList(
+          dynamic root, String key) =>
+      _findNamedList(root, key);
 
   static DiscoverBanner? _bannerFrom(Map<String, dynamic> d) {
     final url = coverOf(d, const <String>['imageUrl']);

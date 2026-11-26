@@ -38,10 +38,12 @@ class ImmersivePlayer extends StatelessWidget {
       body: Stack(
         children: [
           // 1. 封面模糊背景
-          Positioned.fill(child: _Backdrop(
-            url: song?.cover,
-            dark: state.showLyrics ? true : pal.dark,
-          )),
+          Positioned.fill(
+            child: _Backdrop(
+              url: song?.cover,
+              dark: state.showLyrics ? true : pal.dark,
+            ),
+          ),
           // 2. 暗色蒙层（保证文字可读）
           Positioned.fill(
             child: DecoratedBox(
@@ -50,8 +52,9 @@ class ImmersivePlayer extends StatelessWidget {
                 // 白色几何歌词淹没。
                 color: state.showLyrics
                     ? Colors.black.withValues(alpha: 0.72)
-                    : (pal.dark ? Colors.black : Colors.white)
-                        .withValues(alpha: pal.dark ? 0.45 : 0.30),
+                    : (pal.dark ? Colors.black : Colors.white).withValues(
+                        alpha: pal.dark ? 0.45 : 0.30,
+                      ),
               ),
             ),
           ),
@@ -59,9 +62,7 @@ class ImmersivePlayer extends StatelessWidget {
             child: Column(
               children: [
                 if (!state.immersiveFullscreen) _topBar(context, song, pal),
-                Expanded(
-                  child: _stage(context, song, pal, size, wide),
-                ),
+                Expanded(child: _stage(context, song, pal, size, wide)),
                 if (!state.immersiveFullscreen)
                   _BottomControls(state: state, pal: pal),
                 // 沉浸模式下仍保留一个轻量的退出入口
@@ -71,7 +72,10 @@ class ImmersivePlayer extends StatelessWidget {
                     child: Padding(
                       padding: const EdgeInsets.only(top: 8, right: 12),
                       child: IconButton(
-                        icon: const Icon(Icons.fullscreen_exit, color: Colors.white70),
+                        icon: const Icon(
+                          Icons.fullscreen_exit,
+                          color: Colors.white70,
+                        ),
                         onPressed: state.toggleImmersiveFullscreen,
                         tooltip: '退出全屏沉浸',
                       ),
@@ -86,7 +90,13 @@ class ImmersivePlayer extends StatelessWidget {
   }
 
   /// 舞台：按播放器样式分派（REA 4 种样式）。
-  Widget _stage(BuildContext context, Song? song, MuyuPalette pal, Size size, bool wide) {
+  Widget _stage(
+    BuildContext context,
+    Song? song,
+    MuyuPalette pal,
+    Size size,
+    bool wide,
+  ) {
     // 从播放条进入时先展示「封面 + 歌词」的播放页；点歌词按钮才进入
     // 以歌词为主的 sonnet 视图。两种视图都保留封面。
     if (!state.showLyrics) {
@@ -98,10 +108,16 @@ class ImmersivePlayer extends StatelessWidget {
                 SizedBox(
                   width: math.min(size.width * 0.34, 420),
                   child: _CoverSide(
-                      song: song, pal: pal, spinning: state.audio.playing),
+                    state: state,
+                    song: song,
+                    pal: pal,
+                    spinning: state.audio.playing,
+                  ),
                 ),
                 const SizedBox(width: 48),
-                Expanded(child: _LyricSide(state: state, pal: pal)),
+                Expanded(
+                  child: _LyricSide(state: state, pal: pal),
+                ),
                 SizedBox(width: size.width * 0.05),
               ],
             )
@@ -143,10 +159,17 @@ class ImmersivePlayer extends StatelessWidget {
                   SizedBox(width: size.width * 0.06),
                   SizedBox(
                     width: math.min(size.width * 0.34, 420),
-                    child: _CoverSide(song: song, pal: pal, spinning: state.audio.playing),
+                    child: _CoverSide(
+                      state: state,
+                      song: song,
+                      pal: pal,
+                      spinning: state.audio.playing,
+                    ),
                   ),
                   const SizedBox(width: 48),
-                  Expanded(child: _LyricSide(state: state, pal: pal)),
+                  Expanded(
+                    child: _LyricSide(state: state, pal: pal),
+                  ),
                   SizedBox(width: size.width * 0.05),
                 ],
               )
@@ -174,14 +197,22 @@ class ImmersivePlayer extends StatelessWidget {
           Expanded(
             child: Column(
               children: [
-                Text(song?.name ?? '正在播放',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: pal.text)),
+                Text(
+                  song?.name ?? '正在播放',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: pal.text,
+                  ),
+                ),
                 if (song != null)
-                  Text(song.artistText,
-                      maxLines: 1,
-                      style: TextStyle(fontSize: 11, color: pal.muted)),
+                  Text(
+                    song.artistText,
+                    maxLines: 1,
+                    style: TextStyle(fontSize: 11, color: pal.muted),
+                  ),
               ],
             ),
           ),
@@ -202,9 +233,12 @@ class ImmersivePlayer extends StatelessWidget {
             tooltip: '播放器样式',
           ),
           IconButton(
-            icon: Icon(state.immersiveFullscreen
-                ? Icons.fullscreen_exit
-                : Icons.fullscreen, color: pal.text),
+            icon: Icon(
+              state.immersiveFullscreen
+                  ? Icons.fullscreen_exit
+                  : Icons.fullscreen,
+              color: pal.text,
+            ),
             onPressed: () => state.toggleImmersiveFullscreen(),
             tooltip: '全屏沉浸',
           ),
@@ -233,22 +267,30 @@ class ImmersivePlayer extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('播放器样式',
-                  style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+              child: Text(
+                '播放器样式',
+                style: TextStyle(fontWeight: FontWeight.w700, color: pal.text),
+              ),
             ),
-            ...PlayerStyle.values.map((s) => ListTile(
-                  leading: Icon(
-                    state.playerStyle == s ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                    color: pal.accent,
-                  ),
-                  title: Text(s.label, style: TextStyle(color: pal.text)),
-                  subtitle: Text(s.desc,
-                      style: TextStyle(color: pal.muted, fontSize: 11)),
-                  onTap: () {
-                    state.setPlayerStyle(s);
-                    Navigator.pop(context);
-                  },
-                )),
+            ...PlayerStyle.values.map(
+              (s) => ListTile(
+                leading: Icon(
+                  state.playerStyle == s
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: pal.accent,
+                ),
+                title: Text(s.label, style: TextStyle(color: pal.text)),
+                subtitle: Text(
+                  s.desc,
+                  style: TextStyle(color: pal.muted, fontSize: 11),
+                ),
+                onTap: () {
+                  state.setPlayerStyle(s);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
             const SizedBox(height: 12),
           ],
         ),
@@ -270,8 +312,13 @@ class ImmersivePlayer extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text('歌词样式',
-                    style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+                child: Text(
+                  '歌词样式',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: pal.text,
+                  ),
+                ),
               ),
               ListTile(
                 dense: true,
@@ -280,7 +327,8 @@ class ImmersivePlayer extends StatelessWidget {
                 trailing: Switch(
                   value: st.align == LyricAlign.center,
                   onChanged: (v) => state.updateLyricStyle(
-                      st.copyWith(align: v ? LyricAlign.center : LyricAlign.left)),
+                    st.copyWith(align: v ? LyricAlign.center : LyricAlign.left),
+                  ),
                 ),
               ),
               ListTile(
@@ -289,7 +337,8 @@ class ImmersivePlayer extends StatelessWidget {
                 title: Text('歌词粗体', style: TextStyle(color: pal.text)),
                 trailing: Switch(
                   value: st.bold,
-                  onChanged: (v) => state.updateLyricStyle(st.copyWith(bold: v)),
+                  onChanged: (v) =>
+                      state.updateLyricStyle(st.copyWith(bold: v)),
                 ),
               ),
               ListTile(
@@ -300,10 +349,17 @@ class ImmersivePlayer extends StatelessWidget {
                   value: st.columns,
                   underline: const SizedBox.shrink(),
                   items: <int>[1, 2, 3]
-                      .map((c) => DropdownMenuItem<int>(value: c, child: Text('$c 列')))
+                      .map(
+                        (c) => DropdownMenuItem<int>(
+                          value: c,
+                          child: Text('$c 列'),
+                        ),
+                      )
                       .toList(),
                   onChanged: (v) {
-                    if (v != null) state.updateLyricStyle(st.copyWith(columns: v));
+                    if (v != null) {
+                      state.updateLyricStyle(st.copyWith(columns: v));
+                    }
                   },
                 ),
               ),
@@ -315,7 +371,10 @@ class ImmersivePlayer extends StatelessWidget {
                   value: st.font,
                   underline: const SizedBox.shrink(),
                   items: kBuiltinFonts
-                      .map((f) => DropdownMenuItem<String>(value: f, child: Text(f)))
+                      .map(
+                        (f) =>
+                            DropdownMenuItem<String>(value: f, child: Text(f)),
+                      )
                       .toList(),
                   onChanged: (v) {
                     if (v != null) state.updateLyricStyle(st.copyWith(font: v));
@@ -335,12 +394,14 @@ class ImmersivePlayer extends StatelessWidget {
                         min: 0.7,
                         max: 1.8,
                         divisions: 11,
-                        onChanged: (v) => state.updateLyricStyle(
-                            st.copyWith(fontScale: v)),
+                        onChanged: (v) =>
+                            state.updateLyricStyle(st.copyWith(fontScale: v)),
                       ),
                     ),
-                    Text('${(st.fontScale * 100).round()}%',
-                        style: TextStyle(color: pal.muted, fontSize: 11)),
+                    Text(
+                      '${(st.fontScale * 100).round()}%',
+                      style: TextStyle(color: pal.muted, fontSize: 11),
+                    ),
                   ],
                 ),
               ),
@@ -353,6 +414,55 @@ class ImmersivePlayer extends StatelessWidget {
                   onChanged: (v) =>
                       state.updateLyricStyle(st.copyWith(followCoverColor: v)),
                 ),
+              ),
+              StatefulBuilder(
+                builder: (context, setSheetState) {
+                  final audio = state.audio;
+                  final offsetMs = audio.lyricOffset.inMilliseconds;
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(Icons.sync, color: pal.accent),
+                    title: Text('歌词同步', style: TextStyle(color: pal.text)),
+                    subtitle: Text(
+                      offsetMs == 0
+                          ? '无偏移 · 点 +/- 每次校准 100ms'
+                          : '当前偏移 ${offsetMs > 0 ? '+' : ''}$offsetMs ms',
+                      style: TextStyle(color: pal.muted, fontSize: 11),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove, size: 18),
+                          tooltip: '歌词延后 100ms',
+                          onPressed: () {
+                            audio.adjustLyricOffset(
+                              const Duration(milliseconds: -100),
+                            );
+                            setSheetState(() {});
+                          },
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            audio.resetLyricOffset();
+                            setSheetState(() {});
+                          },
+                          child: const Text('重置'),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add, size: 18),
+                          tooltip: '歌词提前 100ms',
+                          onPressed: () {
+                            audio.adjustLyricOffset(
+                              const Duration(milliseconds: 100),
+                            );
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -371,37 +481,54 @@ class ImmersivePlayer extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('音质', style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+              child: Text(
+                '音质',
+                style: TextStyle(fontWeight: FontWeight.w700, color: pal.text),
+              ),
             ),
-            ...AudioQuality.values.map((q) => ListTile(
-                  leading: Icon(
-                    state.audio.quality == q ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                    color: pal.accent,
-                  ),
-                  title: Text(q.label, style: TextStyle(color: pal.text)),
-                  onTap: () {
-                    state.audio.setQuality(q);
-                    Navigator.pop(context);
-                  },
-                )),
+            ...AudioQuality.values.map(
+              (q) => ListTile(
+                leading: Icon(
+                  state.audio.quality == q
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: pal.accent,
+                ),
+                title: Text(q.label, style: TextStyle(color: pal.text)),
+                onTap: () {
+                  state.audio.setQuality(q);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
             const Divider(),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('音效', style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+                child: Text(
+                  '音效',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: pal.text,
+                  ),
+                ),
               ),
             ),
-            ...MuyuAudioController.kEffects.map((e) => ListTile(
-                  dense: true,
-                  leading: Icon(
-                    state.audio.effect == e ? Icons.check_circle : Icons.circle_outlined,
-                    color: pal.accent,
-                    size: 18,
-                  ),
-                  title: Text(e, style: TextStyle(color: pal.text, fontSize: 13)),
-                  onTap: () => state.audio.setEffect(e),
-                )),
+            ...MuyuAudioController.kEffects.map(
+              (e) => ListTile(
+                dense: true,
+                leading: Icon(
+                  state.audio.effect == e
+                      ? Icons.check_circle
+                      : Icons.circle_outlined,
+                  color: pal.accent,
+                  size: 18,
+                ),
+                title: Text(e, style: TextStyle(color: pal.text, fontSize: 13)),
+                onTap: () => state.audio.setEffect(e),
+              ),
+            ),
             const Divider(),
             ListTile(
               dense: true,
@@ -432,14 +559,18 @@ class ImmersivePlayer extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('定时停止',
-                  style: TextStyle(fontWeight: FontWeight.w700, color: pal.text)),
+              child: Text(
+                '定时停止',
+                style: TextStyle(fontWeight: FontWeight.w700, color: pal.text),
+              ),
             ),
             ...<int>[5, 10, 15, 30, 45, 60].map(
               (m) => ListTile(
                 dense: true,
-                title: Text('$m 分钟后停止',
-                    style: TextStyle(color: pal.text, fontSize: 13)),
+                title: Text(
+                  '$m 分钟后停止',
+                  style: TextStyle(color: pal.text, fontSize: 13),
+                ),
                 onTap: () {
                   state.audio.setSleepTimer(m);
                   Navigator.pop(context);
@@ -448,8 +579,10 @@ class ImmersivePlayer extends StatelessWidget {
             ),
             ListTile(
               dense: true,
-              title: Text('取消定时',
-                  style: TextStyle(color: pal.text, fontSize: 13)),
+              title: Text(
+                '取消定时',
+                style: TextStyle(color: pal.text, fontSize: 13),
+              ),
               onTap: () {
                 state.audio.setSleepTimer(0);
                 Navigator.pop(context);
@@ -500,14 +633,16 @@ class _Backdrop extends StatelessWidget {
   }
 }
 
-/// 左侧封面（黑胶光盘效果）。
-class _CoverSide extends StatelessWidget {
+/// 左侧封面（黑胶光盘效果 + 按压形变 + 滑动光效）。
+class _CoverSide extends StatefulWidget {
   const _CoverSide({
+    required this.state,
     required this.song,
     required this.pal,
     required this.spinning,
     this.maxHeight,
   });
+  final AppState state;
   final Song? song;
   final MuyuPalette pal;
   final bool spinning;
@@ -516,11 +651,58 @@ class _CoverSide extends StatelessWidget {
   final double? maxHeight;
 
   @override
+  State<_CoverSide> createState() => _CoverSideState();
+}
+
+class _CoverSideState extends State<_CoverSide> with TickerProviderStateMixin {
+  late final AnimationController _press = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 170),
+    lowerBound: 0,
+    upperBound: 1,
+  );
+  late final AnimationController _sheen = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 7),
+  );
+
+  bool get _shouldAnimateSheen => widget.state.glassSlide && widget.spinning;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_shouldAnimateSheen) _sheen.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CoverSide oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final wasAnimating = oldWidget.state.glassSlide && oldWidget.spinning;
+    if (wasAnimating != _shouldAnimateSheen) _syncSheen();
+  }
+
+  void _syncSheen() {
+    if (_shouldAnimateSheen) {
+      _sheen.repeat();
+    } else {
+      _sheen.stop();
+      _sheen.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _press.dispose();
+    _sheen.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     var side = math.min(MediaQuery.of(context).size.height * 0.5, 420.0);
-    if (maxHeight != null) {
+    if (widget.maxHeight != null) {
       // 文字区约需 90px，封面本体不超过剩余高度。
-      side = math.min(side, math.max(60.0, maxHeight! - 92));
+      side = math.min(side, math.max(60.0, widget.maxHeight! - 92));
     }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -528,24 +710,115 @@ class _CoverSide extends StatelessWidget {
       children: [
         AspectRatio(
           aspectRatio: 1,
-          child: VinylCover(url: song?.cover, size: side, spinning: spinning),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: widget.state.glassPress ? (_) => _press.forward() : null,
+            onTapUp: widget.state.glassPress ? (_) => _press.reverse() : null,
+            onTapCancel: widget.state.glassPress
+                ? () => _press.reverse()
+                : null,
+            child: AnimatedBuilder(
+              animation: _press,
+              builder: (context, child) {
+                final t = Curves.easeOutCubic.transform(_press.value);
+                return Transform.scale(scale: 1.0 - 0.018 * t, child: child);
+              },
+              child: ClipOval(
+                child: CustomPaint(
+                  foregroundPainter: _SheenPainter(
+                    animation: _sheen,
+                    color: widget.state.glowColor,
+                    enabled: _shouldAnimateSheen,
+                  ),
+                  child: VinylCover(
+                    url: widget.song?.cover,
+                    size: side,
+                    spinning: widget.spinning,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
         const SizedBox(height: 28),
-        Text(song?.name ?? '未在播放',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: pal.text)),
+        Text(
+          widget.song?.name ?? '未在播放',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w700,
+            color: widget.pal.text,
+          ),
+        ),
         const SizedBox(height: 8),
-        Text(song?.artistText ?? '',
-            style: TextStyle(fontSize: 13, color: pal.text.withValues(alpha: 0.62))),
-        if (song?.album != null && song!.album.isNotEmpty)
+        Text(
+          widget.song?.artistText ?? '',
+          style: TextStyle(
+            fontSize: 13,
+            color: widget.pal.text.withValues(alpha: 0.62),
+          ),
+        ),
+        if (widget.song?.album != null && widget.song!.album.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(song!.album,
-                style: TextStyle(fontSize: 11, color: pal.text.withValues(alpha: 0.4))),
+            child: Text(
+              widget.song!.album,
+              style: TextStyle(
+                fontSize: 11,
+                color: widget.pal.text.withValues(alpha: 0.4),
+              ),
+            ),
           ),
       ],
     );
   }
+}
+
+class _SheenPainter extends CustomPainter {
+  const _SheenPainter({
+    required this.animation,
+    required this.color,
+    required this.enabled,
+  }) : super(repaint: enabled ? animation : null);
+  final Animation<double> animation;
+  final Color color;
+  final bool enabled;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!enabled) return;
+    canvas.save();
+    final bounds = Offset.zero & size;
+    canvas.clipPath(Path()..addOval(bounds));
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.rotate(-0.55);
+    final span = size.width * 2.6;
+    final x = -span / 2 + animation.value * span;
+    final band = Rect.fromLTWH(
+      x - size.width * 0.22,
+      -size.height,
+      size.width * 0.44,
+      size.height * 2,
+    );
+    final paint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [
+          Colors.transparent,
+          color.withValues(alpha: 0.10),
+          Colors.transparent,
+        ],
+      ).createShader(band);
+    canvas.drawRect(band, paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _SheenPainter old) =>
+      old.animation != animation ||
+      old.color != color ||
+      old.enabled != enabled;
 }
 
 /// 右侧歌词列表（逐字卡拉OK）。
@@ -561,18 +834,25 @@ class _LyricSide extends StatefulWidget {
 
 class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
   final ScrollController _scroll = ScrollController();
-  final ValueNotifier<Duration> _displayPosition =
-      ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<Duration> _displayPosition = ValueNotifier<Duration>(
+    Duration.zero,
+  );
   Ticker? _ticker;
   int _lastActive = -1;
+  String? _songId;
+
+  bool get _shouldTick =>
+      widget.state.audio.playing && widget.state.lyrics.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _displayPosition.value = widget.state.audio.displayPosition;
+    final audio = widget.state.audio;
+    _songId = audio.current?.id;
+    _displayPosition.value = audio.lyricPosition;
     _ticker = createTicker((_) {
       if (!mounted) return;
-      final next = widget.state.audio.displayPosition;
+      final next = widget.state.audio.lyricPosition;
       _displayPosition.value = next;
       final active = _activeIndex(widget.state.lyrics, next);
       if (active != _lastActive) {
@@ -582,26 +862,45 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
         setState(() {});
       }
     });
-    if (widget.state.audio.playing) _ticker!.start();
+    audio.addListener(_onAudioChanged);
+    if (_shouldTick) _ticker!.start();
+  }
+
+  void _onAudioChanged() {
+    final audio = widget.state.audio;
+    final songId = audio.current?.id;
+    if (songId != _songId) {
+      _songId = songId;
+      _lastActive = -1;
+      if (mounted) setState(() {});
+    }
+    _displayPosition.value = audio.lyricPosition;
+    _syncTicker();
+  }
+
+  void _syncTicker() {
+    if (_shouldTick) {
+      if (_ticker?.isActive == false) _ticker!.start();
+    } else if (_ticker?.isActive == true) {
+      _ticker!.stop();
+      _displayPosition.value = widget.state.audio.lyricPosition;
+    }
   }
 
   @override
   void didUpdateWidget(covariant _LyricSide oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final wasPlaying = oldWidget.state.audio.playing;
-    final playing = widget.state.audio.playing;
-    if (wasPlaying != playing) {
-      if (playing) {
-        _ticker!.start();
-      } else {
-        _ticker!.stop();
-        _displayPosition.value = widget.state.audio.position;
-      }
+    if (oldWidget.state.audio != widget.state.audio) {
+      oldWidget.state.audio.removeListener(_onAudioChanged);
+      widget.state.audio.addListener(_onAudioChanged);
     }
+    _onAudioChanged();
+    _syncTicker();
   }
 
   @override
   void dispose() {
+    widget.state.audio.removeListener(_onAudioChanged);
     _ticker?.dispose();
     _displayPosition.dispose();
     _scroll.dispose();
@@ -622,7 +921,10 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
         child: Text(
           '暂无歌词 · 可在设置中开启第三方歌词匹配，或导入本地 .lrc / .ttml',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, color: widget.pal.text.withValues(alpha: 0.5)),
+          style: TextStyle(
+            fontSize: 13,
+            color: widget.pal.text.withValues(alpha: 0.5),
+          ),
         ),
       );
     }
@@ -682,46 +984,89 @@ class _LyricRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final focus = math.max(0.0, 1 - distance / 4.0);
+    final focus = math.max(0.0, 1 - distance / 4.0).clamp(0.0, 1.0);
     final fontSize = 19.0 + 5.0 * focus;
-    final baseColor = pal.text.withValues(alpha: active ? 1.0 : (0.30 + 0.10 * (1 - focus.clamp(0, 1))));
+    final baseColor = pal.text.withValues(
+      alpha: active ? 1.0 : (0.30 + 0.10 * (1 - focus)),
+    );
+    final targetOpacity = active ? 1.0 : (0.62 + 0.28 * focus);
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: double.infinity,
-              child: active && line.hasWords && position != null
-                  ? ValueListenableBuilder<Duration>(
-                      valueListenable: position!,
-                      builder: (context, pos, _) => _KaraokeText(
-                        line: line,
-                        pal: pal,
-                        position: pos,
-                        lineEnd: lineEnd,
-                        fontSize: fontSize,
-                      ),
-                    )
-                  : Text(
-                      line.text,
-                      style: TextStyle(
-                        fontSize: fontSize,
-                        fontWeight: FontWeight.w600,
-                        color: baseColor,
-                        height: 1.25,
+    return AnimatedSlide(
+      offset: Offset(0, active ? -0.006 : 0),
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutQuart,
+      child: AnimatedScale(
+        scale: active ? 1.014 : 1.0,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutQuart,
+        child: AnimatedOpacity(
+          opacity: targetOpacity,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOut,
+          child: GestureDetector(
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutQuart,
+              padding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: active ? 12 : 10,
+              ),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                gradient: active
+                    ? LinearGradient(
+                        colors: [
+                          pal.accent.withValues(alpha: 0.10),
+                          Colors.transparent,
+                        ],
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                      )
+                    : null,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: active && line.hasWords && position != null
+                        ? ValueListenableBuilder<Duration>(
+                            valueListenable: position!,
+                            builder: (context, pos, _) => _KaraokeText(
+                              line: line,
+                              pal: pal,
+                              position: pos,
+                              lineEnd: lineEnd,
+                              fontSize: fontSize,
+                            ),
+                          )
+                        : Text(
+                            line.text,
+                            style: TextStyle(
+                              fontSize: fontSize,
+                              fontWeight: FontWeight.w600,
+                              color: baseColor,
+                              height: 1.25,
+                            ),
+                          ),
+                  ),
+                  ...line.subtitles.map(
+                    (s) => Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        s,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: pal.text.withValues(alpha: 0.48),
+                        ),
                       ),
                     ),
+                  ),
+                ],
+              ),
             ),
-            ...line.subtitles.map((s) => Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(s,
-                      style: TextStyle(fontSize: 13, color: pal.text.withValues(alpha: 0.48))),
-                )),
-          ],
+          ),
         ),
       ),
     );
@@ -811,7 +1156,10 @@ class _KaraokePainter extends CustomPainter {
 
   TextPainter _createPainter(Color color) {
     return TextPainter(
-      text: TextSpan(text: text, style: style.copyWith(color: color)),
+      text: TextSpan(
+        text: text,
+        style: style.copyWith(color: color),
+      ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
     );
@@ -829,7 +1177,11 @@ class _KaraokePainter extends CustomPainter {
 
 /// 窄屏播放页：封面在上、歌词在下。
 class _NarrowLyrics extends StatelessWidget {
-  const _NarrowLyrics({required this.state, required this.song, required this.pal});
+  const _NarrowLyrics({
+    required this.state,
+    required this.song,
+    required this.pal,
+  });
   final AppState state;
   final Song? song;
   final MuyuPalette pal;
@@ -845,6 +1197,7 @@ class _NarrowLyrics extends StatelessWidget {
             child: SizedBox(
               width: 320,
               child: _CoverSide(
+                state: state,
                 song: song,
                 pal: pal,
                 spinning: state.audio.playing,
@@ -853,7 +1206,9 @@ class _NarrowLyrics extends StatelessWidget {
             ),
           ),
         ),
-        Expanded(child: _LyricSide(state: state, pal: pal)),
+        Expanded(
+          child: _LyricSide(state: state, pal: pal),
+        ),
       ],
     );
   }
@@ -889,7 +1244,8 @@ class _BottomControls extends StatelessWidget {
                       max: total > 0 ? total : 1.0,
                       activeColor: pal.accent,
                       inactiveColor: pal.text.withValues(alpha: 0.25),
-                      onChanged: (v) => audio.seek(Duration(seconds: v.toInt())),
+                      onChanged: (v) =>
+                          audio.seek(Duration(seconds: v.toInt())),
                     ),
                   ),
                   _t(_fmt(total)),
@@ -914,8 +1270,11 @@ class _BottomControls extends StatelessWidget {
                 radius: 26,
                 backgroundColor: pal.accent,
                 child: IconButton(
-                  icon: Icon(audio.playing ? Icons.pause : Icons.play_arrow,
-                      color: pal.surface, size: 28),
+                  icon: Icon(
+                    audio.playing ? Icons.pause : Icons.play_arrow,
+                    color: pal.surface,
+                    size: 28,
+                  ),
                   onPressed: audio.toggle,
                 ),
               ),
@@ -924,8 +1283,10 @@ class _BottomControls extends StatelessWidget {
                 onPressed: audio.next,
               ),
               IconButton(
-                icon: Icon(audio.volume == 0 ? Icons.volume_off : Icons.volume_up,
-                    color: pal.text),
+                icon: Icon(
+                  audio.volume == 0 ? Icons.volume_off : Icons.volume_up,
+                  color: pal.text,
+                ),
                 onPressed: () => audio.setVolume(audio.volume == 0 ? 1.0 : 0.0),
               ),
             ],
@@ -935,7 +1296,8 @@ class _BottomControls extends StatelessWidget {
     );
   }
 
-  Widget _t(String s) => Text(s, style: TextStyle(fontSize: 11, color: pal.muted));
+  Widget _t(String s) =>
+      Text(s, style: TextStyle(fontSize: 11, color: pal.muted));
 
   static String _fmt(double seconds) {
     final s = seconds.toInt();
@@ -958,18 +1320,29 @@ class SonnetLyrics extends StatefulWidget {
 
 class _SonnetLyricsState extends State<SonnetLyrics>
     with TickerProviderStateMixin {
-  final ValueNotifier<Duration> _displayPosition =
-      ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<Duration> _displayPosition = ValueNotifier<Duration>(
+    Duration.zero,
+  );
   Ticker? _ticker;
   int _active = -1;
+  String? _songId;
+  late final AnimationController _ambient = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 12),
+  );
+
+  bool get _shouldAnimate =>
+      widget.state.audio.playing && widget.state.lyrics.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _displayPosition.value = widget.state.audio.displayPosition;
+    final audio = widget.state.audio;
+    _songId = audio.current?.id;
+    _displayPosition.value = audio.lyricPosition;
     _ticker = createTicker((_) {
       if (!mounted) return;
-      final next = widget.state.audio.displayPosition;
+      final next = widget.state.audio.lyricPosition;
       _displayPosition.value = next;
       final active = _LyricSideState._activeIndex(widget.state.lyrics, next);
       // 只在换句时重建整层；句内逐帧颜色由 _KaraokeText 的 painter 完成。
@@ -978,26 +1351,48 @@ class _SonnetLyricsState extends State<SonnetLyrics>
         setState(() {});
       }
     });
-    if (widget.state.audio.playing) _ticker!.start();
+    audio.addListener(_onAudioChanged);
+    _syncAnimations();
+  }
+
+  void _onAudioChanged() {
+    final audio = widget.state.audio;
+    final songId = audio.current?.id;
+    if (songId != _songId) {
+      _songId = songId;
+      _active = -1;
+      if (mounted) setState(() {});
+    }
+    _displayPosition.value = audio.lyricPosition;
+    _syncAnimations();
+  }
+
+  void _syncAnimations() {
+    if (_shouldAnimate) {
+      if (_ticker?.isActive == false) _ticker!.start();
+      if (!_ambient.isAnimating) _ambient.repeat();
+    } else {
+      if (_ticker?.isActive == true) _ticker!.stop();
+      if (_ambient.isAnimating) _ambient.stop();
+      _displayPosition.value = widget.state.audio.lyricPosition;
+    }
   }
 
   @override
   void didUpdateWidget(covariant SonnetLyrics oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final wasPlaying = oldWidget.state.audio.playing;
-    final playing = widget.state.audio.playing;
-    if (wasPlaying != playing) {
-      if (playing) {
-        _ticker!.start();
-      } else {
-        _ticker!.stop();
-        _displayPosition.value = widget.state.audio.position;
-      }
+    if (oldWidget.state.audio != widget.state.audio) {
+      oldWidget.state.audio.removeListener(_onAudioChanged);
+      widget.state.audio.addListener(_onAudioChanged);
     }
+    _onAudioChanged();
+    _syncAnimations();
   }
 
   @override
   void dispose() {
+    widget.state.audio.removeListener(_onAudioChanged);
+    _ambient.dispose();
     _ticker?.dispose();
     _displayPosition.dispose();
     super.dispose();
@@ -1009,31 +1404,59 @@ class _SonnetLyricsState extends State<SonnetLyrics>
     final active = _LyricSideState._activeIndex(lines, _displayPosition.value);
     if (active != _active) _active = active;
     final st = widget.state.lyricStyle;
-    final glow = st.followCoverColor ? widget.state.glowColor : widget.pal.accent;
+    final glow = st.followCoverColor
+        ? widget.state.glowColor
+        : widget.pal.accent;
+    final glass = widget.state.glass;
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        CustomPaint(painter: _SonnetGeometryPainter(glow: glow)),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Container(
-            width: 260,
-            height: 260,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(colors: [
-                glow.withValues(alpha: 0.22),
-                Colors.transparent,
-              ]),
+        RepaintBoundary(
+          child: CustomPaint(
+            painter: _SonnetGeometryPainter(
+              glow: glow,
+              animation: _ambient,
+              glass: glass,
+              animated: widget.state.glassSlide,
+            ),
+          ),
+        ),
+        AnimatedBuilder(
+          animation: _ambient,
+          builder: (context, child) {
+            final wave = math.sin(_ambient.value * math.pi * 2);
+            final pulse = 1.0 + 0.055 * wave;
+            return Opacity(
+              opacity: 0.72 + 0.28 * (0.5 + 0.5 * wave),
+              child: Transform.scale(scale: pulse, child: child),
+            );
+          },
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: RepaintBoundary(
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [glow.withValues(alpha: 0.16), Colors.transparent],
+                  ),
+                ),
+              ),
             ),
           ),
         ),
         if (lines.isEmpty || active < 0)
           Center(
-            child: Text('暂无歌词',
-                style: TextStyle(
-                    color: widget.pal.text.withValues(alpha: 0.5), fontSize: 16)),
+            child: Text(
+              '暂无歌词',
+              style: TextStyle(
+                color: widget.pal.text.withValues(alpha: 0.5),
+                fontSize: 16,
+              ),
+            ),
           )
         else
           LayoutBuilder(
@@ -1052,49 +1475,74 @@ class _SonnetLyricsState extends State<SonnetLyrics>
                     if (active - 1 >= 0)
                       Positioned(
                         top: h * 0.20,
-                        left: st.align == LyricAlign.center ? w * 0.22 : w * 0.10,
-                        child: _outlined(
+                        left: st.align == LyricAlign.center
+                            ? w * 0.22
+                            : w * 0.10,
+                        child: _outlinedTransition(
                           lines[active - 1].text,
                           (h * 0.11 * st.fontScale).clamp(48.0, 150.0),
-                          Colors.white,
                         ),
                       ),
                     Positioned(
                       top: h * 0.36,
                       left: st.align == LyricAlign.center ? w * 0.10 : w * 0.06,
                       right: st.align == LyricAlign.center ? w * 0.10 : 0,
-                      child: ValueListenableBuilder<Duration>(
-                        valueListenable: _displayPosition,
-                        builder: (context, pos, _) => _KaraokeText(
-                          line: current,
-                          pal: widget.pal,
-                          position: pos,
-                          lineEnd: active + 1 < lines.length
-                              ? lines[active + 1].time
-                              : null,
-                          fontSize:
-                              (h * 0.15 * st.fontScale).clamp(64.0, 200.0),
-                          fontWeight:
-                              st.bold ? FontWeight.w900 : FontWeight.w600,
-                          baseColor: Colors.white.withValues(alpha: 0.45),
-                          sungColor: Colors.white,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, animation) => FadeTransition(
+                          opacity: animation,
+                          child: SlideTransition(
+                            position: Tween<Offset>(
+                              begin: const Offset(0, 0.025),
+                              end: Offset.zero,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                        ),
+                        child: ValueListenableBuilder<Duration>(
+                          key: ValueKey(
+                            '${_songId ?? ''}:${current.time.inMilliseconds}:${current.text}',
+                          ),
+                          valueListenable: _displayPosition,
+                          builder: (context, pos, _) => _KaraokeText(
+                            line: current,
+                            pal: widget.pal,
+                            position: pos,
+                            lineEnd: active + 1 < lines.length
+                                ? lines[active + 1].time
+                                : null,
+                            fontSize: (h * 0.15 * st.fontScale).clamp(
+                              64.0,
+                              200.0,
+                            ),
+                            fontWeight: st.bold
+                                ? FontWeight.w900
+                                : FontWeight.w600,
+                            baseColor: Colors.white.withValues(alpha: 0.45),
+                            sungColor: Colors.white,
+                          ),
                         ),
                       ),
                     ),
                     if (active + 1 < lines.length)
                       Positioned(
                         top: h * 0.60,
-                        left: st.align == LyricAlign.center ? w * 0.26 : w * 0.18,
-                        child: _outlined(
+                        left: st.align == LyricAlign.center
+                            ? w * 0.26
+                            : w * 0.18,
+                        child: _outlinedTransition(
                           lines[active + 1].text,
                           (h * 0.10 * st.fontScale).clamp(44.0, 130.0),
-                          Colors.white,
                         ),
                       ),
                     if (current.subtitles.isNotEmpty)
                       Positioned(
                         top: h * 0.53,
-                        left: st.align == LyricAlign.center ? w * 0.12 : w * 0.08,
+                        left: st.align == LyricAlign.center
+                            ? w * 0.12
+                            : w * 0.08,
                         child: Text(
                           current.subtitles.join(' · '),
                           style: TextStyle(
@@ -1122,23 +1570,46 @@ class _SonnetLyricsState extends State<SonnetLyrics>
         fontWeight: FontWeight.w900,
         color: Colors.transparent,
         height: 1.1,
-        shadows: [
-          Shadow(color: color.withValues(alpha: 0.85), blurRadius: 1),
-        ],
+        shadows: [Shadow(color: color.withValues(alpha: 0.85), blurRadius: 1)],
       ),
     );
   }
+
+  Widget _outlinedTransition(String text, double size) => AnimatedSwitcher(
+    duration: const Duration(milliseconds: 360),
+    switchInCurve: Curves.easeOutCubic,
+    switchOutCurve: Curves.easeInCubic,
+    transitionBuilder: (child, animation) =>
+        FadeTransition(opacity: animation, child: child),
+    child: KeyedSubtree(
+      key: ValueKey(text),
+      child: _outlined(text, size, Colors.white),
+    ),
+  );
 }
 
 /// 几何线框：十字 / 菱形 / 圆弧 / 虚线对齐框（对应 native_sonnet_geometry.go）。
 class _SonnetGeometryPainter extends CustomPainter {
-  const _SonnetGeometryPainter({required this.glow});
+  const _SonnetGeometryPainter({
+    required this.glow,
+    required this.animation,
+    required this.glass,
+    required this.animated,
+  }) : super(repaint: animated ? animation : null);
   final Color glow;
+  final Animation<double> animation;
+  final ImmersiveGlass glass;
+  final bool animated;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final t = animated ? animation.value * math.pi * 2 : 0.0;
+    final wave = math.sin(t);
+    final glassAlpha = 0.18 + glass.index * 0.035;
     final line = Paint()
-      ..color = Colors.white.withValues(alpha: 0.22)
+      ..color = Colors.white.withValues(
+        alpha: glassAlpha + (animated ? 0.035 * wave : 0),
+      )
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.4;
     final dim = Paint()
@@ -1147,27 +1618,41 @@ class _SonnetGeometryPainter extends CustomPainter {
       ..strokeWidth = 1;
 
     // 十字线（左上 + 中上）
-    _cross(canvas, line, size.width * 0.28, size.height * 0.14, 34);
-    _cross(canvas, line, size.width * 0.52, size.height * 0.09, 26);
+    final wobble = animated ? 5.0 * wave : 0.0;
+    _cross(canvas, line, size.width * 0.28 + wobble, size.height * 0.14, 34);
+    _cross(canvas, line, size.width * 0.52 - wobble, size.height * 0.09, 26);
     // 菱形（右上）
     final d = size.width * 0.07;
     final cx = size.width * 0.74;
     final cy = size.height * 0.30;
+    final softGlow = Paint()
+      ..color = glow.withValues(alpha: 0.045 + glass.index * 0.012)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(
+      Offset(cx, cy),
+      d * (1.05 + (animated ? 0.06 * wave : 0)),
+      softGlow,
+    );
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(animated ? 0.10 * wave : 0);
     canvas.drawPath(
       Path()
-        ..moveTo(cx, cy - d)
-        ..lineTo(cx + d, cy)
-        ..lineTo(cx, cy + d)
-        ..lineTo(cx - d, cy)
+        ..moveTo(0, -d)
+        ..lineTo(d, 0)
+        ..lineTo(0, d)
+        ..lineTo(-d, 0)
         ..close(),
       line,
     );
+    canvas.restore();
     // 圆弧（左下）
     canvas.drawArc(
       Rect.fromCenter(
-          center: Offset(size.width * 0.14, size.height * 0.66),
-          width: 180,
-          height: 180),
+        center: Offset(size.width * 0.14, size.height * 0.66),
+        width: 180,
+        height: 180,
+      ),
       0,
       math.pi * 1.4,
       false,
@@ -1178,8 +1663,17 @@ class _SonnetGeometryPainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: 0.14)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
-    _dashedRect(canvas, dash, Rect.fromLTWH(
-      size.width * 0.18, size.height * 0.42, size.width * 0.5, size.height * 0.3));
+    _dashedRect(
+      canvas,
+      dash,
+      Rect.fromLTWH(
+        size.width * 0.18,
+        size.height * 0.42,
+        size.width * 0.5,
+        size.height * 0.3,
+      ),
+      animated ? (t * 3) % 12 : 0,
+    );
   }
 
   void _cross(Canvas c, Paint p, double x, double y, double r) {
@@ -1187,18 +1681,28 @@ class _SonnetGeometryPainter extends CustomPainter {
     c.drawLine(Offset(x, y - r), Offset(x, y + r), p);
   }
 
-  void _dashedRect(Canvas c, Paint p, Rect r) {
+  void _dashedRect(Canvas c, Paint p, Rect r, double phase) {
     const dash = 6.0;
-    for (var x = r.left; x < r.right; x += dash * 2) {
-      c.drawLine(Offset(x, r.top), Offset(math.min(x + dash, r.right), r.top), p);
-      c.drawLine(Offset(x, r.bottom), Offset(math.min(x + dash, r.right), r.bottom), p);
+    for (var x = r.left - phase; x < r.right; x += dash * 2) {
+      final start = math.max(x, r.left);
+      final end = math.min(x + dash, r.right);
+      if (start >= end) continue;
+      c.drawLine(Offset(start, r.top), Offset(end, r.top), p);
+      c.drawLine(Offset(start, r.bottom), Offset(end, r.bottom), p);
     }
-    for (var y = r.top; y < r.bottom; y += dash * 2) {
-      c.drawLine(Offset(r.left, y), Offset(r.left, math.min(y + dash, r.bottom)), p);
-      c.drawLine(Offset(r.right, y), Offset(r.right, math.min(y + dash, r.bottom)), p);
+    for (var y = r.top - phase; y < r.bottom; y += dash * 2) {
+      final start = math.max(y, r.top);
+      final end = math.min(y + dash, r.bottom);
+      if (start >= end) continue;
+      c.drawLine(Offset(r.left, start), Offset(r.left, end), p);
+      c.drawLine(Offset(r.right, start), Offset(r.right, end), p);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _SonnetGeometryPainter old) => old.glow != glow;
+  bool shouldRepaint(covariant _SonnetGeometryPainter old) =>
+      old.glow != glow ||
+      old.animation != animation ||
+      old.glass != glass ||
+      old.animated != animated;
 }
