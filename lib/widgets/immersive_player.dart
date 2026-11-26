@@ -3,6 +3,8 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show RenderAbstractViewport, RenderBox, ScrollCacheExtent;
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models.dart';
@@ -833,12 +835,10 @@ class _LyricSide extends StatefulWidget {
 }
 
 class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
-  final ScrollController _scroll = ScrollController();
   final ValueNotifier<Duration> _displayPosition = ValueNotifier<Duration>(
     Duration.zero,
   );
   Ticker? _ticker;
-  int _lastActive = -1;
   String? _songId;
 
   bool get _shouldTick =>
@@ -852,15 +852,9 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
     _displayPosition.value = audio.lyricPosition;
     _ticker = createTicker((_) {
       if (!mounted) return;
-      final next = widget.state.audio.lyricPosition;
-      _displayPosition.value = next;
-      final active = _activeIndex(widget.state.lyrics, next);
-      if (active != _lastActive) {
-        _lastActive = active;
-        _scrollTo(active);
-        // 只重建列表的行状态（字号/焦点），逐帧颜色由当前行 painter 完成。
-        setState(() {});
-      }
+      // 只把位置推给 LyricFocusList；换行判断和滚动都在列表内部完成，
+      // 这里不 setState，避免整页跟着播放进度重建。
+      _displayPosition.value = widget.state.audio.lyricPosition;
     });
     audio.addListener(_onAudioChanged);
     if (_shouldTick) _ticker!.start();
@@ -871,10 +865,12 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
     final songId = audio.current?.id;
     if (songId != _songId) {
       _songId = songId;
-      _lastActive = -1;
+      _displayPosition.value = audio.lyricPosition;
+      // 切歌时换 key 重建 LyricFocusList，清空旧歌的滚动动画与延迟回调。
       if (mounted) setState(() {});
+    } else {
+      _displayPosition.value = audio.lyricPosition;
     }
-    _displayPosition.value = audio.lyricPosition;
     _syncTicker();
   }
 
@@ -903,19 +899,147 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
     widget.state.audio.removeListener(_onAudioChanged);
     _ticker?.dispose();
     _displayPosition.dispose();
-    _scroll.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final lines = widget.state.lyrics;
-    final active = _activeIndex(lines, _displayPosition.value);
-    if (active >= 0 && active != _lastActive) {
-      _lastActive = active;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(active));
+    return LyricFocusList(
+      key: ValueKey<String>('lyrics:${_songId ?? ''}'),
+      songId: _songId,
+      lines: lines,
+      position: _displayPosition,
+      pal: widget.pal,
+      onLineTap: (i) {
+        if (i >= 0 && i < lines.length) {
+          widget.state.audio.seek(lines[i].time);
+        }
+      },
+    );
+  }
+
+  static int _activeIndex(List<LyricLine> lines, Duration pos) =>
+      _lyricIndexAt(lines, pos);
+}
+
+/// 计算给定播放位置对应的歌词行下标（-1 表示尚未到第一句）。
+int _lyricIndexAt(List<LyricLine> lines, Duration position) {
+  var idx = -1;
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].time <= position) idx = i;
+  }
+  return idx;
+}
+
+/// 歌词聚焦列表：当前行始终稳定落在可视区域中线附近。
+///
+/// 滚动只在以下情况触发：active 行改变、切歌/换歌词、seek 等位置跳变。
+/// 逐帧播放位置只用于判断是否换行，不会每帧调用 [ScrollController.animateTo]。
+/// 所有滚动都走同一个 controller，新的 [ScrollController.animateTo] 会覆盖旧的
+/// 滚动活动，因此快速换行/切歌不会叠加多个动画。
+///
+/// 目标行尚未被 `ListView.builder` 构建时（例如拖动进度条远距离 seek），
+/// 先用已构建行的真实坐标估算并 `jumpTo`，下一帧再精确居中。
+class LyricFocusList extends StatefulWidget {
+  const LyricFocusList({
+    super.key,
+    required this.lines,
+    required this.position,
+    required this.pal,
+    required this.onLineTap,
+    this.songId,
+    this.controller,
+  });
+
+  final List<LyricLine> lines;
+
+  /// 已叠加用户校准偏移的歌词位置（[MuyuAudioController.lyricPosition]）。
+  final ValueListenable<Duration> position;
+  final MuyuPalette pal;
+  final ValueChanged<int> onLineTap;
+
+  /// 切歌时变化；变化后清空旧行 key、滚动目标并重新居中。
+  final String? songId;
+
+  /// 测试或外部统一管理滚动时注入；不传则由列表自己创建并释放。
+  final ScrollController? controller;
+
+  @override
+  State<LyricFocusList> createState() => _LyricFocusListState();
+}
+
+class _LyricFocusListState extends State<LyricFocusList> {
+  static const EdgeInsets _listPadding = EdgeInsets.symmetric(vertical: 120);
+  static const Duration _scrollDuration = Duration(milliseconds: 320);
+
+  final ScrollController _fallbackScroll = ScrollController();
+  final Map<int, GlobalKey> _rowKeys = <int, GlobalKey>{};
+
+  int _active = -1;
+  int _scrollEpoch = 0;
+  int _correctionAttempts = 0;
+  int? _scheduledEpoch;
+  bool _pendingForce = false;
+  double _estimatedRowHeight = 64;
+
+  ScrollController get _scroll => widget.controller ?? _fallbackScroll;
+
+  @override
+  void initState() {
+    super.initState();
+    _active = _lyricIndexAt(widget.lines, widget.position.value);
+    widget.position.addListener(_onPositionChanged);
+    _scheduleCenter(force: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant LyricFocusList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.position != widget.position) {
+      oldWidget.position.removeListener(_onPositionChanged);
+      widget.position.addListener(_onPositionChanged);
     }
 
+    final songChanged = oldWidget.songId != widget.songId;
+    final linesChanged = !identical(oldWidget.lines, widget.lines);
+    if (songChanged || linesChanged) {
+      _rowKeys.clear();
+      _scrollEpoch++; // 让上一首歌/上一份歌词的延迟回调失效。
+      _correctionAttempts = 0;
+      _active = _lyricIndexAt(widget.lines, widget.position.value);
+      _scheduleCenter(force: true);
+      return;
+    }
+
+    final active = _lyricIndexAt(widget.lines, widget.position.value);
+    if (active != _active) {
+      _active = active;
+      _correctionAttempts = 0;
+      _scheduleCenter();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.position.removeListener(_onPositionChanged);
+    _fallbackScroll.dispose();
+    super.dispose();
+  }
+
+  void _onPositionChanged() {
+    if (!mounted) return;
+    final active = _lyricIndexAt(widget.lines, widget.position.value);
+    // 同一句内的高频位置更新不滚动，只刷新当前行的卡拉OK painter。
+    if (active == _active) return;
+    _correctionAttempts = 0;
+    setState(() => _active = active);
+    _scheduleCenter();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = widget.lines;
     if (lines.isEmpty) {
       return Center(
         child: Text(
@@ -929,42 +1053,134 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
       );
     }
 
+    final active = _active;
     return ListView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.symmetric(vertical: 120),
+      padding: _listPadding,
+      // 远距离 seek 时让目标行有更大机会进入构建范围，随后精确居中。
+      scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
       itemCount: lines.length,
       itemBuilder: (context, i) => _LyricRow(
+        key: _rowKeys.putIfAbsent(i, GlobalKey.new),
         line: lines[i],
         active: i == active,
-        distance: (i - active).abs(),
+        distance: active < 0 ? 999 : (i - active).abs(),
         pal: widget.pal,
-        position: i == active ? _displayPosition : null,
+        position: i == active ? widget.position : null,
         lineEnd: i + 1 < lines.length ? lines[i + 1].time : null,
-        onTap: () => widget.state.audio.seek(lines[i].time),
+        onTap: () => widget.onLineTap(i),
       ),
     );
   }
 
-  void _scrollTo(int active) {
-    if (!mounted || active < 0 || !_scroll.hasClients) return;
+  /// 合并同一帧内的多次滚动请求；force 表示即使目标 offset 未变也要重新居中。
+  void _scheduleCenter({bool force = false}) {
+    if (!mounted) return;
+    _pendingForce = _pendingForce || force;
+    if (_scheduledEpoch == _scrollEpoch) return;
+    _scheduledEpoch = _scrollEpoch;
+    final epoch = _scrollEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || epoch != _scrollEpoch) return;
+      _scheduledEpoch = null;
+      final pendingForce = _pendingForce;
+      _pendingForce = false;
+      _centerActive(force: pendingForce);
+    });
+  }
+
+  void _centerActive({required bool force}) {
+    if (!mounted || !_scroll.hasClients) return;
+    final position = _scroll.position;
+    if (!position.hasContentDimensions || _active < 0) return;
+    if (_active >= widget.lines.length) return;
+
+    var target = _revealOffsetFor(_active);
+    if (target == null) {
+      // 目标行尚未构建：用当前已构建行的真实坐标估算，跳过去后再精确居中。
+      final estimate = _estimateOffsetFor(_active);
+      if (estimate.isFinite) {
+        _scroll.jumpTo(estimate < 0 ? 0 : estimate);
+      }
+      if (_correctionAttempts < 2) {
+        _correctionAttempts++;
+        _scheduleCenter(force: true);
+      }
+      return;
+    }
+
+    _correctionAttempts = 0;
+    final clamped = target
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    final delta = (clamped - position.pixels).abs();
+    if (!force && delta < 1.0) return;
+    // 同一个 ScrollController 上再次 animateTo 会取消上一次滚动活动，
+    // 因此连续换行/切歌只会保留最后一次动画，不会叠加。
     _scroll.animateTo(
-      (active * 76.0 - 180).clamp(0.0, _scroll.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOut,
+      clamped,
+      duration: _scrollDuration,
+      curve: Curves.easeOutCubic,
     );
   }
 
-  static int _activeIndex(List<LyricLine> lines, Duration pos) {
-    var idx = -1;
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].time <= pos) idx = i;
+  /// 用目标行自身的 RenderBox 求精确滚动位置（alignment 0.5 = 视口居中）。
+  double? _revealOffsetFor(int index) {
+    final render = _rowKeys[index]?.currentContext?.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) {
+      return null;
     }
-    return idx;
+    final viewport = RenderAbstractViewport.maybeOf(render);
+    if (viewport == null) return null;
+    final height = render.size.height;
+    if (height > 0) {
+      _estimatedRowHeight = _estimatedRowHeight * 0.8 + height * 0.2;
+    }
+    return viewport.getOffsetToReveal(render, 0.5).offset;
+  }
+
+  /// 目标行未构建时的估算：锚定到任意已构建行的真实内容坐标，再按平均行高外推。
+  double _estimateOffsetFor(int index) {
+    final position = _scroll.position;
+    final viewport = position.viewportDimension;
+    var heightSum = 0.0;
+    var heightCount = 0;
+    int? anchorIndex;
+    double? anchorTop;
+
+    for (final entry in _rowKeys.entries) {
+      final render = entry.value.currentContext?.findRenderObject();
+      if (render is! RenderBox || !render.attached || !render.hasSize) continue;
+      final viewportObject = RenderAbstractViewport.maybeOf(render);
+      if (viewportObject == null) continue;
+      if (entry.key != index) {
+        heightSum += render.size.height;
+        heightCount++;
+      }
+      if (anchorIndex == null ||
+          (entry.key - index).abs() < (anchorIndex - index).abs()) {
+        anchorIndex = entry.key;
+        anchorTop = viewportObject.getOffsetToReveal(render, 0.0).offset;
+      }
+    }
+
+    final average = heightCount > 0
+        ? heightSum / heightCount
+        : _estimatedRowHeight;
+    if (average > 0) _estimatedRowHeight = average;
+    if (anchorIndex != null && anchorTop != null) {
+      return anchorTop +
+          (index - anchorIndex) * average +
+          average / 2 -
+          viewport / 2;
+    }
+    return _listPadding.top + index * average + average / 2 - viewport / 2;
   }
 }
 
 class _LyricRow extends StatelessWidget {
   const _LyricRow({
+    super.key,
     required this.line,
     required this.active,
     required this.distance,

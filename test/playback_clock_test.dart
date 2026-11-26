@@ -118,4 +118,35 @@ void main() {
       const Duration(milliseconds: 1200),
     );
   });
+
+  test('连续重锚不累积漂移，偏移只叠加在单调位置上', () {
+    var elapsed = Duration.zero;
+    final clock = PlaybackClock(elapsed: () => elapsed);
+    clock.duration = const Duration(minutes: 4);
+    clock.sync(Duration.zero, playing: true);
+
+    // 模拟播放器每 200ms 发一次低频位置：单调时钟只在该锚点基础上外推，
+    // 不依赖 DateTime，也不会因为回调频率变化而让歌词位置越走越快。
+    var reported = Duration.zero;
+    for (var i = 0; i < 300; i++) {
+      elapsed += const Duration(milliseconds: 200);
+      reported += const Duration(milliseconds: 200);
+      clock.sync(reported, playing: true);
+      expect(clock.position, reported);
+      expect(
+        clock.adjusted(const Duration(milliseconds: 100)),
+        reported + const Duration(milliseconds: 100),
+      );
+    }
+
+    clock.setPlaying(false);
+    final paused = clock.position;
+    elapsed += const Duration(seconds: 3);
+    clock.setPlaying(false); // 重复暂停事件不能重锚或推进。
+    expect(clock.position, paused);
+    expect(
+      clock.adjusted(const Duration(milliseconds: -100)),
+      paused - const Duration(milliseconds: 100),
+    );
+  });
 }

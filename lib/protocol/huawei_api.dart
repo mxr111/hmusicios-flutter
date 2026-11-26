@@ -76,18 +76,13 @@ class DiscoverData {
   }
 }
 
-/// 首页 contentType=998 的功能卡（现在就听/每日30首/心动模式/新歌推荐/热歌速递/私藏馆）。
+/// 首页真实功能卡。`id` 必须是响应里的真实 contentID（例如 `pmf001` / `a001`），
+/// 不再使用二进制里不存在的 serviceType。
 class DiscoverFeature {
-  const DiscoverFeature({
-    required this.id,
-    required this.title,
-    required this.serviceType,
-    this.cover,
-  });
+  const DiscoverFeature({required this.id, required this.title, this.cover});
 
   final String id;
   final String title;
-  final String serviceType;
   final Uri? cover;
 }
 
@@ -100,6 +95,13 @@ class DiscoverBanner {
   final String title;
   final String subtitle;
   final Uri? imageUrl;
+}
+
+class _HomeBatch {
+  _HomeBatch(this.id, this.label);
+  final String id;
+  final String label;
+  final List<Song> songs = <Song>[];
 }
 
 /// 一次华为搜索返回的三类结果。
@@ -127,6 +129,29 @@ class HuaweiAPI {
   String? memberLabel;
   bool isMember = false;
   void Function()? onProfileChanged;
+
+  /// 真实首页常量（REA 证据：recom_exclusive / 8011、每日30首 a001、热歌榜 24926）。
+  static const String featuredColumnPath =
+      '/music-operation-service/v1/service/column/detail/bycolumnid';
+  static const String dailyPlaylistPath =
+      '/music-operation-service/v3/service/musiclist/detail/bymusiclistid';
+  static const String featuredColumnId = '8011';
+  static const String dailyPlaylistId = 'a001';
+  static const String hotChartId = '24926';
+
+  static const Duration _authCooldown = Duration(seconds: 30);
+  DateTime? _authRetryBlockedUntil;
+  Future<void>? _sessionRefresh;
+
+  /// 990000 会话刷新失败后的 30 秒冷却状态（测试 / 日志导出可见）。
+  bool get isAuthCoolingDown {
+    final until = _authRetryBlockedUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  void clearAuthCooldown() {
+    _authRetryBlockedUntil = null;
+  }
 
   /// 源码事实：必须有音乐会话（token + snsUserID）才能发业务请求。
   bool get isLoggedIn => gateway.session != null;
@@ -1131,18 +1156,23 @@ class HuaweiAPI {
       final hiRes = map['hiResAvailable'];
       if (hiRes == true) out.add(AudioQuality.hiRes);
 
-      final highest = HuaweiGateway.firstString(
-        map,
-        const ['highestQuality', 'highestReportedQuality', 'maxQuality'],
-      );
+      final highest = HuaweiGateway.firstString(map, const [
+        'highestQuality',
+        'highestReportedQuality',
+        'maxQuality',
+      ]);
       if (highest != null) out.add(fromTier(highest));
 
       final audio = map['huaweiAudioFiles'];
       if (audio is Map) {
         final files = Map<String, dynamic>.from(audio);
         final types =
-            HuaweiGateway.firstInt(files, const ['types', 'type', 'qualityTypes']) ??
-                0;
+            HuaweiGateway.firstInt(files, const [
+              'types',
+              'type',
+              'qualityTypes',
+            ]) ??
+            0;
         if (types & 0x60 != 0 || types >= 32) out.add(AudioQuality.hiRes);
         if (types & 0x0E != 0) out.add(AudioQuality.lossless);
         if (types & 0x02 != 0) out.add(AudioQuality.standard);
@@ -1154,13 +1184,18 @@ class HuaweiAPI {
         for (final item in list) {
           if (item is! Map) continue;
           final file = Map<String, dynamic>.from(item);
-          final tier = HuaweiGateway.firstString(
-            file,
-            const ['qualityType', 'quality', 'playQuality', 'level'],
-          );
+          final tier = HuaweiGateway.firstString(file, const [
+            'qualityType',
+            'quality',
+            'playQuality',
+            'level',
+          ]);
           if (tier != null) out.add(fromTier(tier));
-          final bitRate =
-              HuaweiGateway.firstInt(file, const ['bitRate', 'br', 'maxbr']);
+          final bitRate = HuaweiGateway.firstInt(file, const [
+            'bitRate',
+            'br',
+            'maxbr',
+          ]);
           if (bitRate != null && bitRate > 0) {
             out.add(AudioQuality.fromBitrate(bitRate));
           }
@@ -1560,49 +1595,171 @@ class HuaweiAPI {
   ///     → childSimpleInfos → listRcmInfos（电台歌曲）
   /// 其余 column 按 contentID/contentType 分流为新歌 / 歌单 / 榜单 / Banner。
   /// 每个板块独立容错；接口无数据即空状态，绝不填假内容。
-  Future<DiscoverData> discover() async {
-    // 运行时实测：首页聚合接口必须 GET；POST 返回 405。
-    final json = await gateway.get(HuaweiPaths.home);
-    final data = parseDiscover(json);
-    // 2.0.4 真实首页把 6 个入口放在 contentType=998 功能卡里；
-    // 有功能卡时不要再请求 8011 空栏目，交给上层按 a001/a003/a004/a006 拉各自曲库。
-    if (data.features.isNotEmpty) return data;
-    if (data.recommended.isEmpty && data.recommendedColumnId != null) {
-      final extra = await _fetchRecommendationColumn(data.recommendedColumnId!);
-      if (extra.isNotEmpty) {
-        return data.copyWith(
-          recommended: extra,
-          listen: data.listen.isEmpty ? extra : data.listen,
-        );
+  Future<T> _withAuthRetry<T>(Future<T> Function() work) async {
+    try {
+      return await work();
+    } catch (e) {
+      if (!_isAuthFailure(e)) rethrow;
+      final at = gateway.accountToken;
+      if (at == null || at.isEmpty) {
+        _authRetryBlockedUntil = DateTime.now().add(_authCooldown);
+        rethrow;
+      }
+      final until = _authRetryBlockedUntil;
+      if (until != null && DateTime.now().isBefore(until)) {
+        AppLog.add('home', '990000 冷却中，跳过会话刷新');
+        rethrow;
+      }
+      try {
+        final pending = _sessionRefresh ??= gateway
+            .exchangeMusicToken(at)
+            .then<void>((_) {})
+            .whenComplete(() => _sessionRefresh = null);
+        await pending;
+        AppLog.add('home', '990000 -> 会话已刷新，重试一次');
+        return await work();
+      } catch (retryError) {
+        _authRetryBlockedUntil = DateTime.now().add(_authCooldown);
+        AppLog.add('home', '990000 会话刷新失败，冷却 30 秒：$retryError');
+        rethrow;
       }
     }
-    return data;
   }
 
-  /// 首页「为你推荐」是独立的私享好歌栏目。REA 常量：
-  /// `recom_exclusive` / `8011` / `column/detail/bycolumnid?`。
-  /// 首页 JSON 有栏目编号时直接用；否则按 8011 兜底。
-  Future<List<Song>> _fetchRecommendationColumn(String columnId) async {
-    final id = Uri.encodeQueryComponent(columnId);
-    final paths = <String>[
-      '/music-operation-service/v1/service/column/detail/bycolumnid'
-          '?columnId=$id&start=0&limit=30&hasRecommend=1',
-      '/music-operation-service/v1/service/column/detail/bycolumnid'
-          '?columnID=$id&start=0&limit=30&hasRecommend=1',
-    ];
-    for (final path in paths) {
-      try {
-        final json = await gateway.get(path);
-        final songs = _songsFromColumnJson(json);
-        if (songs.isNotEmpty) {
-          AppLog.add('api', '首页私享好歌 column=$columnId -> ${songs.length} 首');
-          return songs;
-        }
-      } catch (e) {
-        AppLog.add('api', '首页私享好歌 column=$columnId 失败：$e');
+  static bool _isAuthFailure(Object e) {
+    final m = e.toString();
+    return m.contains('990000') || m.contains('鉴权失败') || m.contains('重新登录华为账号');
+  }
+
+  static String _errorCode(Object e) {
+    final m = e.toString();
+    final hit = RegExp(r'\b\d{6}\b').firstMatch(m);
+    return hit?.group(0) ?? m;
+  }
+
+  /// 每个首页板块独立容错，并记录 ID / 数量 / 错误码，方便日志导出定位。
+  Future<List<T>> _homeSoft<T>(
+    String label,
+    String id,
+    Future<List<T>> Function() work,
+  ) async {
+    try {
+      final items = await work();
+      AppLog.add('home', '$label id=$id count=${items.length} code=000000');
+      return items;
+    } catch (e) {
+      AppLog.add('home', '$label id=$id count=0 error=${_errorCode(e)}');
+      return <T>[];
+    }
+  }
+
+  /// 首页不是一条流：聚合页给骨架，其余板块各自请求；任何一路失败只留空。
+  Future<DiscoverData> discover() async {
+    final homeFuture = _withAuthRetry(() => gateway.get(HuaweiPaths.home));
+    final featuredFuture = _homeSoft<Song>(
+      'featuredSongs',
+      featuredColumnId,
+      () => featuredSongs(),
+    );
+    final dailyFuture = _homeSoft<Song>(
+      'daily30',
+      dailyPlaylistId,
+      () => daily30(),
+    );
+    final fmFuture = _homeSoft<Song>('privateFm', 'mode=1', () => privateFm());
+    final playlistsFuture = _homeSoft<Playlist>(
+      'recommendedPlaylists',
+      'recommend/playlist',
+      () => recommendedPlaylists(),
+    );
+    final chartFuture = _homeSoft<Song>(
+      'chartSongs',
+      hotChartId,
+      () => chartSongs(hotChartId),
+    );
+
+    final data = parseDiscover(await homeFuture);
+    final featured = await featuredFuture;
+    final daily = await dailyFuture;
+    final fm = await fmFuture;
+    final recommendedLists = await playlistsFuture;
+    final hotChartSongs = await chartFuture;
+
+    final playlists = _mergePlaylists(<List<Playlist>>[
+      recommendedLists,
+      data.playlists,
+    ]);
+    if (!playlists.any((p) => p.id == dailyPlaylistId)) {
+      playlists.add(
+        const Playlist(id: dailyPlaylistId, name: '每日30首', kind: 'collected'),
+      );
+    }
+    final charts = _mergePlaylists(<List<Playlist>>[data.charts]);
+    if (!charts.any((p) => p.id == hotChartId)) {
+      charts.add(const Playlist(id: hotChartId, name: '热歌榜', kind: 'chart'));
+    }
+    if (hotChartSongs.isNotEmpty) {
+      final index = charts.indexWhere((p) => p.id == hotChartId);
+      charts[index] = Playlist(
+        id: hotChartId,
+        name: '热歌榜',
+        kind: 'chart',
+        songCount: hotChartSongs.length,
+      );
+    }
+
+    return data.copyWith(
+      recommended: featured.isNotEmpty ? featured : data.recommended,
+      recommendedColumnId: featuredColumnId,
+      daily: daily.isNotEmpty ? daily : data.daily,
+      listen: fm.isNotEmpty ? fm : data.listen,
+      playlists: playlists,
+      charts: charts,
+    );
+  }
+
+  static List<Playlist> _mergePlaylists(Iterable<List<Playlist>> groups) {
+    final seen = <String>{};
+    final out = <Playlist>[];
+    for (final group in groups) {
+      for (final p in group) {
+        final key = p.id.isNotEmpty ? p.id : '${p.name}|${p.kind}';
+        if (seen.add(key)) out.add(p);
       }
     }
-    return const <Song>[];
+    return out;
+  }
+
+  /// 「为你推荐」：recom_exclusive / 8011 → column/detail/bycolumnid。
+  Future<List<Song>> featuredSongs({String columnId = featuredColumnId}) async {
+    final id = Uri.encodeQueryComponent(columnId);
+    final json = await _withAuthRetry(
+      () => gateway.get(
+        '$featuredColumnPath?columnId=$id&start=0&limit=30&hasRecommend=1',
+      ),
+    );
+    return _songsFromColumnJson(json);
+  }
+
+  /// 每日30首：a001 → v3 musiclist/detail/bymusiclistid（GET）。
+  Future<List<Song>> daily30({String id = dailyPlaylistId}) async {
+    final json = await _withAuthRetry(
+      () => gateway.get(
+        '$dailyPlaylistPath?musicListID=${Uri.encodeQueryComponent(id)}'
+        '&copyrightSwitch=1&start=0&limit=30',
+      ),
+    );
+    return _dedupeSongs(
+      deepList(json, const <String>[
+        'playListSongInfoList',
+        'songSimpleInfos',
+        'contentSimpleInfos',
+        'listRcmInfos',
+        'songs',
+        'list',
+        'data',
+      ]).map(parseSong),
+    ).take(30).toList();
   }
 
   /// 每日推荐：请求体来自运行中 Muyu.exe 堆内真实 JSON。
@@ -1628,51 +1785,75 @@ class HuaweiAPI {
 
   /// 私人电台：请求体字段来自 REA decompile(applicationRequest@0x1404225c0)。
   /// cadence / rcmMode / rcmScenario / refInfo；rcmMode 仅接受 '1'/'2'/'3'。
-  Future<List<Song>> privateRadio({String mode = '1'}) async {
-    final json = await gateway.request(
-      HuaweiPaths.privateFm,
-      body: <String, dynamic>{
-        'cadence': '',
-        'rcmMode': mode,
-        'rcmScenario': '16',
-        'refInfo': <dynamic>[],
-      },
+  Future<List<Song>> privateFm({String mode = '1'}) async {
+    final json = await _withAuthRetry(
+      () => gateway.request(
+        HuaweiPaths.privateFm,
+        body: <String, dynamic>{
+          'cadence': '',
+          'rcmMode': mode,
+          'rcmScenario': '16',
+          'refInfo': <dynamic>[],
+        },
+      ),
     );
-    return deepList(json, const [
-      'songSimpleInfos',
-      'contentSimpleInfos',
-      'songs',
-      'list',
-      'data',
-    ]).map(parseSong).toList();
+    return _dedupeSongs(
+      deepList(json, const <String>[
+        'listRcmInfos',
+        'songSimpleInfos',
+        'contentSimpleInfos',
+        'songs',
+        'list',
+        'data',
+      ]).map(parseSong),
+    );
   }
+
+  Future<List<Song>> privateRadio({String mode = '1'}) => privateFm(mode: mode);
 
   /// 推荐歌单：沐语 /recommend/playlist。
   Future<List<Playlist>> recommendedPlaylists() async {
-    final json = await gateway.request(
-      HuaweiPaths.recommendPlaylist,
-      body: const <String, dynamic>{'contentType': 1, 'start': 0, 'limit': 30},
+    final json = await _withAuthRetry(
+      () => gateway.request(
+        HuaweiPaths.recommendPlaylist,
+        body: const <String, dynamic>{
+          'contentType': 1,
+          'start': 0,
+          'limit': 30,
+        },
+      ),
     );
-    return deepList(json, const [
+    return deepList(json, const <String>[
       'playListInfos',
       'playlistInfos',
       'contentSimpleInfos',
       'songList',
       'list',
       'data',
-    ]).map(parsePlaylist).toList();
+    ]).map(_playlistFromRecommend).where((p) => p.id.isNotEmpty).toList();
+  }
+
+  static Playlist _playlistFromRecommend(Map<String, dynamic> d) {
+    final inner = d['miniMusicListInfoEx'];
+    final map = inner is Map
+        ? <String, dynamic>{...d, ...Map<String, dynamic>.from(inner)}
+        : d;
+    return parsePlaylist(map);
   }
 
   /// 榜单歌曲：chartID / chartCode 来自 REA 符号与堆字段。
   Future<List<Song>> chartSongs(String chartId) async {
     return _collectSongPages((start, limit) async {
       // 运行时实测：榜单详情必须 GET；POST 返回 405。
-      final json = await gateway.get(
-        '${HuaweiPaths.chartDetail}?chartID=${Uri.encodeComponent(chartId)}'
-        '&chartId=${Uri.encodeComponent(chartId)}'
-        '&contentType=1&start=$start&limit=$limit',
+      final json = await _withAuthRetry(
+        () => gateway.get(
+          '${HuaweiPaths.chartDetail}?chartID=${Uri.encodeComponent(chartId)}'
+          '&chartId=${Uri.encodeComponent(chartId)}'
+          '&contentType=1&start=$start&limit=$limit',
+        ),
       );
       return deepList(json, const [
+        'listRcmInfos',
         'songSimpleInfos',
         'contentSimpleInfos',
         'songs',
@@ -1714,55 +1895,91 @@ class HuaweiAPI {
     final columns = _findNamedList(root, 'columnInfoExs');
     final genericSongs = <Song>[];
     final recommended = <Song>[];
-    final listenSongs = <Song>[];
-    final heartSongs = <Song>[];
-    final newSongs = <Song>[];
-    final hotSongs = <Song>[];
+    final sectionSongs = <Song>[];
+    final a001Songs = <Song>[];
+    final radio = <Song>[];
     final playlists = <Playlist>[];
     final charts = <Playlist>[];
     final albums = <Playlist>[];
-    final radio = <Song>[];
     final banners = <DiscoverBanner>[];
     final features = <DiscoverFeature>[];
-    String? recommendedColumnId;
+    final batches = <_HomeBatch>[];
 
-    void addSong(Song song, String label) {
-      if (song.name.isEmpty || song.name == '未知歌曲') return;
-      genericSongs.add(song);
-      final text = label.toLowerCase();
-      if (_isRecommendedLabel(text)) recommended.add(song);
-      if (_isListenLabel(text)) listenSongs.add(song);
-      if (_isHeartLabel(text)) heartSongs.add(song);
-      if (_isNewLabel(text)) newSongs.add(song);
-      if (_isHotLabel(text)) hotSongs.add(song);
+    void collectNested(Map<String, dynamic> content, List<Song> out) {
+      for (final item in _findNamedList(content, 'listRcmInfos')) {
+        out.add(parseSong(item));
+      }
+      for (final item in _findNamedList(content, 'songSimpleInfos')) {
+        out.add(parseSong(item));
+      }
+      for (final child in _findNamedList(content, 'childSimpleInfos')) {
+        final childType =
+            HuaweiGateway.firstString(child, const ['contentType']) ?? '';
+        if (childType == '2') continue;
+        if (childType == '1' || childType.isEmpty) out.add(parseSong(child));
+        for (final item in _findNamedList(child, 'listRcmInfos')) {
+          out.add(parseSong(item));
+        }
+        for (final item in _findNamedList(child, 'songSimpleInfos')) {
+          out.add(parseSong(item));
+        }
+      }
     }
 
-    void addSongMap(Map<String, dynamic> content, String label) {
-      addSong(parseSong(content), label);
+    void collectPmf(Map<String, dynamic> content, String label) {
+      final contentId = _contentIdFrom(content);
+      final feature = _featureFrom(content);
+      if (feature != null) features.add(feature);
+      final top = _HomeBatch(contentId.isEmpty ? 'pmf001' : contentId, label);
+      collectNested(content, top.songs);
+      if (top.songs.isNotEmpty) batches.add(top);
+      for (final child in _findNamedList(content, 'childSimpleInfos')) {
+        final childId = _contentIdFrom(child);
+        final childBatch = _HomeBatch(
+          childId.isEmpty ? 'pmf001' : childId,
+          _contentLabel(child),
+        );
+        final childFeature = _featureFrom(child);
+        if (childFeature != null) features.add(childFeature);
+        collectNested(child, childBatch.songs);
+        if (childBatch.songs.isNotEmpty) batches.add(childBatch);
+      }
     }
 
     for (final column in columns) {
       final columnLabel = _columnLabel(column);
-      if (_isRecommendedLabel(columnLabel)) {
-        recommendedColumnId ??= _columnIdFrom(column);
-      }
+      final columnId = _columnIdFrom(column);
       final contents = _findNamedList(column, 'contentSimpleInfos');
       for (final content in contents) {
+        final contentId = _contentIdFrom(content);
         final label = '$columnLabel ${_contentLabel(content)}'.trim();
         // 运行时实测 contentType 语义：
         // 1=歌曲 2=专辑 4=歌单 7=榜单 11=Banner/入口 12=功能卡
         // 96=分区（childSimpleInfos） 6/10/20=分类/MV/有声书。
         final type =
             HuaweiGateway.firstString(content, const ['contentType']) ?? '';
+        // 真实电台种子卡只认 pmf001（不是旧实现里的 pfm001/pfm002）。
+        if (contentId.toLowerCase() == 'pmf001') {
+          collectPmf(content, label);
+          continue;
+        }
         switch (type) {
           case '1':
-            addSongMap(content, label);
+            final song = parseSong(content);
+            genericSongs.add(song);
+            if (columnId == featuredColumnId ||
+                _isRecommendedLabel(columnLabel)) {
+              recommended.add(song);
+            }
             break;
           case '2':
             albums.add(parseAlbum(content));
             break;
           case '4':
             playlists.add(_withKind(parsePlaylist(content), 'collected'));
+            if (contentId == dailyPlaylistId) {
+              collectNested(content, a001Songs);
+            }
             break;
           case '7':
             charts.add(_withKind(parsePlaylist(content), 'chart'));
@@ -1772,91 +1989,113 @@ class HuaweiAPI {
             if (banner != null) banners.add(banner);
             break;
           case '96':
-            final children = _findNamedList(content, 'childSimpleInfos');
-            for (final child in children) {
+            for (final child in _findNamedList(content, 'childSimpleInfos')) {
               final childType =
                   HuaweiGateway.firstString(child, const ['contentType']) ?? '';
               if (childType == '2') {
                 albums.add(parseAlbum(child));
               } else {
-                addSongMap(child, '$label ${_contentLabel(child)}');
+                if (childType == '1' || childType.isEmpty) {
+                  sectionSongs.add(parseSong(child));
+                }
+                collectNested(child, sectionSongs);
               }
             }
             break;
           case '12':
-            // 功能卡本身不进入列表，但「现在就听/心动模式」卡内可能
-            // 带 listRcmInfos/songSimpleInfos，仍属于该栏目真实曲库。
-            for (final item in _findNamedList(content, 'listRcmInfos')) {
-              final song = parseSong(item);
-              radio.add(song);
-              addSong(song, label);
-            }
-            for (final item in _findNamedList(content, 'songSimpleInfos')) {
-              addSongMap(item, label);
-            }
-            break;
-          case '998':
             final feature = _featureFrom(content);
             if (feature != null) features.add(feature);
+            collectNested(content, radio);
             break;
           default:
-            // 仅当明确带 listRcmInfos（电台推荐）时才取歌。
-            final radioInfos = _findNamedList(content, 'listRcmInfos');
-            if (radioInfos.isNotEmpty) {
-              for (final item in radioInfos) {
-                final song = parseSong(item);
-                radio.add(song);
-                addSong(song, label);
-              }
-            }
-            // 兼容 1.2.0 的旧结构：content 直接带 songSimpleInfos。
-            final nestedSongs = _findNamedList(content, 'songSimpleInfos');
-            if (nestedSongs.isNotEmpty) {
-              for (final item in nestedSongs) {
-                addSongMap(item, label);
-              }
-            }
+            collectNested(content, radio);
         }
       }
     }
 
     if (banners.isEmpty) banners.addAll(parseBanners(root));
-    recommendedColumnId ??= _findRecommendedColumnId(columns);
 
-    final allSongs = _dedupeSongs(genericSongs);
-    final recSongs = _dedupeSongs(recommended);
-    final listen = _dedupeSongs(listenSongs);
-    final heart = _dedupeSongs(heartSongs);
-    final hot = _dedupeSongs(hotSongs);
-    final newOnly = _dedupeSongs(newSongs);
-    final radioSongs = _dedupeSongs(radio);
-    // 私享好歌必须是独立栏目；为空时交给 discover() 用 8011 拉栏目详情，
-    // 不能拿电台/新歌冒充「为你推荐」。
-    final recommendedFinal = recSongs.take(30).toList();
-    final listenFinal = listen.isNotEmpty
-        ? listen.take(30).toList()
-        : recommendedFinal;
-    final newFinal = newOnly.isNotEmpty ? newOnly : allSongs;
+    final embeddedAll = _dedupeSongs(batches.expand((b) => b.songs));
+    radio.addAll(embeddedAll);
+    final used = <String>{};
+    String key(Song song) =>
+        song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
 
+    List<Song> takeSemantic(bool Function(_HomeBatch) test) {
+      final out = <Song>[];
+      for (final batch in batches) {
+        if (!test(batch)) continue;
+        for (final song in _dedupeSongs(batch.songs)) {
+          if (used.add(key(song))) out.add(song);
+        }
+      }
+      return out;
+    }
+
+    String textOf(_HomeBatch b) => '${b.id} ${b.label}'.toLowerCase();
+    var heart = takeSemantic(
+      (b) => textOf(b).contains('heart') || textOf(b).contains('心动'),
+    );
+    var newFromEmbedded = takeSemantic(
+      (b) =>
+          textOf(b).contains('new') ||
+          textOf(b).contains('新歌') ||
+          textOf(b).contains('newsong'),
+    );
+    var hot = takeSemantic(
+      (b) => textOf(b).contains('hot') || textOf(b).contains('热歌'),
+    );
+
+    // 专属端点证据不足时，把 pmf001 内嵌批次按稳定顺序拆成互不重复的
+    // heart / new / hot 三组；这不是跨卡片 fallback。
+    final remaining = embeddedAll
+        .where((song) => !used.contains(key(song)))
+        .toList();
+    final emptySlots = <String>[
+      if (heart.isEmpty) 'heart',
+      if (newFromEmbedded.isEmpty) 'new',
+      if (hot.isEmpty) 'hot',
+    ];
+    if (remaining.isNotEmpty && emptySlots.isNotEmpty) {
+      final chunk = (remaining.length / emptySlots.length).ceil();
+      for (var i = 0; i < emptySlots.length; i++) {
+        final part = remaining.skip(i * chunk).take(chunk).toList();
+        switch (emptySlots[i]) {
+          case 'heart':
+            heart = part;
+            break;
+          case 'new':
+            newFromEmbedded = part;
+            break;
+          case 'hot':
+            hot = part;
+            break;
+        }
+      }
+    }
+
+    final newSongs = sectionSongs.isNotEmpty ? sectionSongs : newFromEmbedded;
     final seenLists = <String>{};
     playlists.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
     charts.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
     albums.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
+    final seenFeatures = <String>{};
+    features.removeWhere((f) => f.id.isNotEmpty && !seenFeatures.add(f.id));
 
     return DiscoverData(
       banners: banners.take(8).toList(),
-      newSongs: newFinal,
+      newSongs: _dedupeSongs(newSongs).take(30).toList(),
       playlists: playlists,
       charts: charts,
-      radio: radioSongs,
+      radio: _dedupeSongs(radio),
       albums: albums,
-      recommended: recommendedFinal,
-      listen: listenFinal,
-      heart: heart.isNotEmpty ? heart.take(30).toList() : radioSongs,
-      hot: hot.take(10).toList(),
-      recommendedColumnId: recommendedColumnId ?? '8011',
+      recommended: _dedupeSongs(recommended).take(30).toList(),
+      listen: embeddedAll.take(30).toList(),
+      heart: _dedupeSongs(heart).take(30).toList(),
+      hot: _dedupeSongs(hot).take(10).toList(),
+      recommendedColumnId: featuredColumnId,
       features: features,
-      daily: const <Song>[],
+      daily: _dedupeSongs(a001Songs),
     );
   }
 
@@ -1865,7 +2104,9 @@ class HuaweiAPI {
     final out = <Song>[];
     for (final song in input) {
       if (song.name.isEmpty || song.name == '未知歌曲') continue;
-      final key = song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
+      final key = song.id.isNotEmpty
+          ? song.id
+          : '${song.name}|${song.artistText}';
       if (!seen.add(key)) continue;
       out.add(song);
     }
@@ -1888,8 +2129,7 @@ class HuaweiAPI {
     return parts.join(' ').toLowerCase();
   }
 
-  static void _collectTextValues(
-      Map<String, dynamic> map, List<String> out) {
+  static void _collectTextValues(Map<String, dynamic> map, List<String> out) {
     for (final key in const <String>[
       'columnKey',
       'columnId',
@@ -1907,14 +2147,15 @@ class HuaweiAPI {
   }
 
   static DiscoverFeature? _featureFrom(Map<String, dynamic> content) {
-    final title = HuaweiGateway.firstString(
-          content,
-          const ['contentName', 'keyName', 'name', 'title'],
-        ) ??
+    var id = _contentIdFrom(content);
+    var title =
+        HuaweiGateway.firstString(content, const [
+          'contentName',
+          'keyName',
+          'name',
+          'title',
+        ]) ??
         '';
-    String? serviceType;
-    String id = '';
-    String realTitle = title;
     final rawInfo = content['contentExInfo'];
     Map<String, dynamic>? info;
     if (rawInfo is Map) {
@@ -1928,69 +2169,40 @@ class HuaweiAPI {
     final real = info?['realContentInfo'];
     if (real is Map) {
       final map = Map<String, dynamic>.from(real);
-      id = HuaweiGateway.firstString(
-            map,
-            const ['contentID', 'contentId', 'id'],
-          ) ??
-          '';
-      realTitle = HuaweiGateway.firstString(
-            map,
-            const ['contentName', 'keyName', 'name', 'title'],
-          ) ??
-          realTitle;
-      final extend = map['extendInfo'];
-      if (extend is Map) {
-        serviceType = HuaweiGateway.firstString(
-          Map<String, dynamic>.from(extend),
-          const ['serviceType'],
-        );
-      } else if (extend is String && extend.trim().startsWith('{')) {
-        try {
-          final decoded = jsonDecode(extend);
-          if (decoded is Map) {
-            serviceType = HuaweiGateway.firstString(
-              Map<String, dynamic>.from(decoded),
-              const ['serviceType'],
-            );
-          }
-        } catch (_) {}
-      }
+      id = id.isEmpty
+          ? (HuaweiGateway.firstString(map, const [
+                  'contentID',
+                  'contentId',
+                  'id',
+                ]) ??
+                '')
+          : id;
+      title =
+          HuaweiGateway.firstString(map, const [
+            'contentName',
+            'keyName',
+            'name',
+            'title',
+          ]) ??
+          title;
     }
     if (id.isEmpty && title.isEmpty) return null;
-    return DiscoverFeature(
-      id: id,
-      title: realTitle.isEmpty ? title : realTitle,
-      serviceType: serviceType ?? '',
-      cover: coverOf(content),
-    );
+    return DiscoverFeature(id: id, title: title, cover: coverOf(content));
   }
+
+  static String _contentIdFrom(Map<String, dynamic> content) =>
+      HuaweiGateway.firstString(content, const [
+        'contentID',
+        'contentId',
+        'contentCode',
+        'id',
+      ]) ??
+      '';
 
   static bool _isRecommendedLabel(String label) =>
       label.contains('recom_exclusive') ||
       label.contains('私享好歌') ||
       label.contains('为你推荐');
-
-  static bool _isListenLabel(String label) =>
-      label.contains('home-listen') ||
-      label.contains('listen') ||
-      label.contains('现在就听') ||
-      label.contains('music fm');
-
-  static bool _isHeartLabel(String label) =>
-      label.contains('home-heart') ||
-      label.contains('heart') ||
-      label.contains('心动');
-
-  static bool _isNewLabel(String label) =>
-      label.contains('home-new') ||
-      label.contains('new-songs') ||
-      label.contains('newsong') ||
-      label.contains('新歌');
-
-  static bool _isHotLabel(String label) =>
-      label.contains('home-hot') ||
-      label.contains('hot-song') ||
-      label.contains('热歌');
 
   static String? _columnIdFrom(Map<String, dynamic> column) {
     final maps = <Map<String, dynamic>>[];
@@ -2006,23 +2218,11 @@ class HuaweiAPI {
         'id',
       ]) {
         final value = map[key];
-        if (value is String &&
-            value.isNotEmpty &&
-            value != 'recom_exclusive') {
+        if (value is String && value.isNotEmpty && value != 'recom_exclusive') {
           return value;
         }
         if (value is num) return value.toString();
       }
-    }
-    return null;
-  }
-
-  static String? _findRecommendedColumnId(
-      List<Map<String, dynamic>> columns) {
-    for (final column in columns) {
-      if (!_isRecommendedLabel(_columnLabel(column))) continue;
-      final id = _columnIdFrom(column);
-      if (id != null) return id;
     }
     return null;
   }
@@ -2096,8 +2296,9 @@ class HuaweiAPI {
   /// Opt-in live probe helper: inspect a named list without reimplementing
   /// Huawei's nested envelope in test code.
   static List<Map<String, dynamic>> debugFindNamedList(
-          dynamic root, String key) =>
-      _findNamedList(root, key);
+    dynamic root,
+    String key,
+  ) => _findNamedList(root, key);
 
   static DiscoverBanner? _bannerFrom(Map<String, dynamic> d) {
     final url = coverOf(d, const <String>['imageUrl']);

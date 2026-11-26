@@ -82,15 +82,14 @@ void main() {
 
   testWidgets('主页为你推荐使用独立私享好歌流，30 首按 5 首一页', (tester) async {
     final state = AppState();
-    state.api.gateway.session =
-        MusicSession(token: 'test-token', snsUserId: 'test-user');
+    state.api.gateway.session = MusicSession(
+      token: 'test-token',
+      snsUserId: 'test-user',
+    );
     final recommended = List<Song>.generate(
       30,
-      (i) => Song(
-        id: 'rec-$i',
-        name: '私享好歌$i',
-        artists: const <String>['真实歌手'],
-      ),
+      (i) =>
+          Song(id: 'rec-$i', name: '私享好歌$i', artists: const <String>['真实歌手']),
     );
     state.homeSongs = recommended;
     state.discover = DiscoverData(
@@ -102,10 +101,12 @@ void main() {
     );
 
     await tester.binding.setSurfaceSize(const Size(1460, 980));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: HomePage(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
     await tester.pump();
 
     expect(find.text('1/6'), findsOneWidget);
@@ -116,15 +117,9 @@ void main() {
 
   testWidgets('首页五张卡使用各自栏目数据，不再复用同一首歌', (tester) async {
     final state = AppState();
-    Song song(String name) => Song(
-          id: name,
-          name: name,
-          artists: const <String>['真实歌手'],
-        );
-    final recommended = List<Song>.generate(
-      5,
-      (i) => song('为你推荐$i'),
-    );
+    Song song(String name) =>
+        Song(id: name, name: name, artists: const <String>['真实歌手']);
+    final recommended = List<Song>.generate(5, (i) => song('为你推荐$i'));
     state.homeSongs = recommended;
     state.discover = DiscoverData(
       recommended: recommended,
@@ -133,40 +128,15 @@ void main() {
       heart: <Song>[song('心动模式曲')],
       newSongs: <Song>[song('新歌推荐曲')],
       hot: <Song>[song('热歌速递曲')],
-      features: <DiscoverFeature>[
-        const DiscoverFeature(
-          id: 'pfm001',
-          title: '现在就听',
-          serviceType: 'privatefm',
-        ),
-        const DiscoverFeature(
-          id: 'a001',
-          title: '每日30首',
-          serviceType: 'dailyrecommend',
-        ),
-        const DiscoverFeature(
-          id: 'pfm002',
-          title: '心动模式',
-          serviceType: 'heartbeatfm',
-        ),
-        const DiscoverFeature(
-          id: 'a003',
-          title: '新歌推荐',
-          serviceType: 'newsongrecommend',
-        ),
-        const DiscoverFeature(
-          id: 'a006',
-          title: '热歌速递',
-          serviceType: 'millionfavoriterecommend',
-        ),
-      ],
     );
 
     await tester.binding.setSurfaceSize(const Size(1460, 980));
-    await tester.pumpWidget(MaterialApp(
-      theme: MuyuTheme.light(),
-      home: Scaffold(body: HomePage(state: state)),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
     await tester.pump();
 
     expect(find.byType(HomeCard), findsNWidgets(5));
@@ -179,6 +149,52 @@ void main() {
     ]) {
       expect(find.textContaining(name), findsOneWidget);
     }
+    state.dispose();
+  });
+
+  testWidgets('五卡 subtitles 各不相同，为你推荐 1/5、热歌榜 1/10', (tester) async {
+    final state = AppState();
+    Song song(String name) =>
+        Song(id: name, name: name, artists: const <String>['真实歌手']);
+    state.discover = DiscoverData(
+      recommended: List<Song>.generate(25, (i) => song('为你推荐$i')),
+      listen: <Song>[song('现在就听曲')],
+      daily: <Song>[song('每日30首曲')],
+      heart: <Song>[song('心动模式曲')],
+      newSongs: <Song>[song('新歌推荐曲')],
+      hot: <Song>[song('热歌速递曲')],
+      playlists: const <Playlist>[
+        Playlist(id: 'pl-1', name: '推荐歌单一', kind: 'collected'),
+      ],
+      charts: List<Playlist>.generate(
+        10,
+        (i) => Playlist(id: 'chart-$i', name: '榜单$i', kind: 'chart'),
+      ),
+    );
+
+    await tester.binding.setSurfaceSize(const Size(1460, 980));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    final subtitles = <String>{
+      '现在就听曲 · 真实歌手',
+      '每日30首曲 · 真实歌手',
+      '心动模式曲 · 真实歌手',
+      '新歌推荐曲 · 真实歌手',
+      '热歌速递曲 · 真实歌手',
+    };
+    for (final text in subtitles) {
+      expect(find.text(text), findsOneWidget);
+    }
+    expect(find.text('1/5'), findsOneWidget);
+    expect(find.text('1/10'), findsOneWidget);
+    expect(find.text('上一组'), findsOneWidget);
+    expect(find.text('下一组'), findsOneWidget);
     state.dispose();
   });
 

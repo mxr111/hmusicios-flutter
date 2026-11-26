@@ -5,43 +5,110 @@ import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/protocol/huawei_gateway.dart';
 
-class _HomeGateway extends HuaweiGateway {
+class _FakeGateway extends HuaweiGateway {
+  _FakeGateway({this.fail990000Times = 0});
+
+  final List<String> gets = <String>[];
+  final List<String> posts = <String>[];
+  int fail990000Times;
+  int musicTokenExchanges = 0;
+
+  Map<String, dynamic> home = <String, dynamic>{
+    'result': <String, dynamic>{'columnInfoExs': <dynamic>[]},
+  };
+  Map<String, dynamic> column = <String, dynamic>{
+    'result': <String, dynamic>{
+      'listRcmInfos': <dynamic>[
+        <String, dynamic>{'contentID': 'rec-1', 'contentName': '私享好歌一'},
+      ],
+    },
+  };
+  Map<String, dynamic> dailyJson = <String, dynamic>{
+    'result': <String, dynamic>{
+      'songSimpleInfos': <dynamic>[
+        <String, dynamic>{'contentID': 'daily-1', 'contentName': '每日一'},
+      ],
+    },
+  };
+  Map<String, dynamic> chartJson = <String, dynamic>{
+    'result': <String, dynamic>{
+      'songSimpleInfos': <dynamic>[
+        <String, dynamic>{'contentID': 'chart-1', 'contentName': '热歌一'},
+      ],
+    },
+  };
+  Map<String, dynamic> fmJson = <String, dynamic>{
+    'result': <String, dynamic>{
+      'listRcmInfos': <dynamic>[
+        <String, dynamic>{'contentID': 'fm-1', 'contentName': '电台一'},
+      ],
+    },
+  };
+  Map<String, dynamic> playlistJson = <String, dynamic>{
+    'result': <String, dynamic>{
+      'playListInfos': <dynamic>[
+        <String, dynamic>{
+          'playListID': 'pl-1',
+          'playListName': '推荐歌单一',
+          'songNum': 12,
+        },
+      ],
+    },
+  };
+
   @override
   Future<Map<String, dynamic>> get(String path) async {
-    if (path.startsWith('/music-operation-service/v1/service/page/detail/all')) {
-      return <String, dynamic>{
-        'result': <String, dynamic>{
-          'columnInfoExs': <dynamic>[
-            <String, dynamic>{
-              'columnInfo': <String, dynamic>{
-                'columnKey': 'recom_exclusive',
-                'columnId': '8011',
-              },
-              'contentSimpleInfos': <dynamic>[],
-            },
-          ],
-        },
-      };
+    gets.add(path);
+    if (fail990000Times > 0) {
+      fail990000Times--;
+      throw const HuaweiException('华为鉴权失败，请重新登录华为账号');
     }
-    if (path.contains('/column/detail/bycolumnid')) {
-      return <String, dynamic>{
-        'result': <String, dynamic>{
-          'listRcmInfos': <dynamic>[
-            <String, dynamic>{
-              'contentID': 'rec-8011-1',
-              'contentName': '私享好歌详情一',
-            },
-            <String, dynamic>{
-              'contentID': 'rec-8011-2',
-              'contentName': '私享好歌详情二',
-            },
-          ],
-        },
-      };
+    if (path.startsWith(
+      '/music-operation-service/v1/service/page/detail/all',
+    )) {
+      return home;
     }
+    if (path.startsWith(HuaweiAPI.featuredColumnPath)) return column;
+    if (path.startsWith(HuaweiAPI.dailyPlaylistPath)) return dailyJson;
+    if (path.contains('/chart/detail/bychartid')) return chartJson;
     throw StateError('unexpected get $path');
   }
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String path, {
+    Map<String, dynamic> body = const <String, dynamic>{},
+  }) async {
+    posts.add('$path ${jsonEncode(body)}');
+    if (path.endsWith('/recommend/privatefm')) return fmJson;
+    if (path.endsWith('/recommend/playlist')) return playlistJson;
+    throw StateError('unexpected post $path');
+  }
+
+  @override
+  Future<MusicSession> exchangeMusicToken(String accessToken) async {
+    musicTokenExchanges++;
+    final updated = MusicSession(token: 'new-token', snsUserId: 'user');
+    session = updated;
+    accountToken = accessToken;
+    return updated;
+  }
 }
+
+Map<String, dynamic> _song(String id, String name) => <String, dynamic>{
+  'contentID': id,
+  'contentName': name,
+  'durationSeconds': 200,
+};
+
+Map<String, dynamic> _batch(String id, String label, List<String> names) =>
+    <String, dynamic>{
+      'contentID': id,
+      'contentName': label,
+      'listRcmInfos': <dynamic>[
+        for (var i = 0; i < names.length; i++) _song('$id-$i', names[i]),
+      ],
+    };
 
 void main() {
   test('榜单解析只使用真实字段，不生成假名字', () {
@@ -79,36 +146,21 @@ void main() {
     expect(fake, isEmpty);
   });
 
-  test('沐语 columnInfoExs 三层结构：pmf001 → childSimpleInfos → listRcmInfos', () {
+  test('pmf001 三层结构：childSimpleInfos → listRcmInfos 拆成独立批次', () {
     final d = HuaweiAPI.parseDiscover(<String, dynamic>{
       'result': <String, dynamic>{
         'columnInfoExs': <dynamic>[
           <String, dynamic>{
-            'columnID': 'home',
+            'columnInfo': <String, dynamic>{'columnID': 'home'},
             'contentSimpleInfos': <dynamic>[
               <String, dynamic>{
                 'contentID': 'pmf001',
+                'contentType': '12',
+                'contentName': '现在就听',
                 'childSimpleInfos': <dynamic>[
-                  <String, dynamic>{
-                    'listRcmInfos': <dynamic>[
-                      <String, dynamic>{
-                        'ID': 'radio-real-1',
-                        'NM': '真实电台歌曲',
-                        'pic': 'https://contentcenter-drcn.dbankcdn.cn/img/r.jpg',
-                      },
-                    ],
-                  },
-                ],
-              },
-              <String, dynamic>{
-                'contentID': 'new-songs',
-                'songSimpleInfos': <dynamic>[
-                  <String, dynamic>{
-                    'contentID': 'song-real-1',
-                    'contentName': '真实新歌',
-                    'middleImgURL': 'https://contentcenter-drcn.dbankcdn.cn/img/s.jpg',
-                    'durationSeconds': 210,
-                  },
+                  _batch('heart-batch', 'heart 心动', <String>['心动一', '心动二']),
+                  _batch('new-batch', 'new 新歌', <String>['新歌一', '新歌二']),
+                  _batch('hot-batch', 'hot 热歌', <String>['热歌一', '热歌二']),
                 ],
               },
             ],
@@ -116,126 +168,166 @@ void main() {
         ],
       },
     });
-    expect(d.radio.length, 1);
-    expect(d.radio.first.id, 'radio-real-1');
-    expect(d.radio.first.name, '真实电台歌曲');
-    expect(d.newSongs.length, 1);
-    expect(d.newSongs.first.id, 'song-real-1');
-    expect(d.newSongs.first.name, '真实新歌');
-    expect(d.newSongs.first.durationMs, 210000);
+
+    expect(d.features.any((f) => f.id == 'pmf001'), isTrue);
+    expect(
+      d.listen.map((s) => s.id),
+      containsAll(<String>['heart-batch-0', 'new-batch-0', 'hot-batch-0']),
+    );
+    expect(d.heart.map((s) => s.id), containsAll(<String>['heart-batch-0']));
+    expect(d.newSongs.map((s) => s.id), containsAll(<String>['new-batch-0']));
+    expect(d.hot.map((s) => s.id), containsAll(<String>['hot-batch-0']));
+    final heartIds = d.heart.map((s) => s.id).toSet();
+    final newIds = d.newSongs.map((s) => s.id).toSet();
+    final hotIds = d.hot.map((s) => s.id).toSet();
+    expect(heartIds.intersection(newIds), isEmpty);
+    expect(heartIds.intersection(hotIds), isEmpty);
+    expect(newIds.intersection(hotIds), isEmpty);
   });
 
-  test('首页按栏目拆分：为你推荐/现在就听/心动/新歌/热歌互不冒充', () {
-    Map<String, dynamic> song(String id, String name) => <String, dynamic>{
-          'contentID': id,
-          'contentName': name,
-          'durationSeconds': 200,
-        };
-    Map<String, dynamic> column(
-      String key,
-      String id,
-      Map<String, dynamic> content,
-    ) =>
-        <String, dynamic>{
-          'columnInfo': <String, dynamic>{
-            'columnKey': key,
-            'columnId': id,
-          },
-          'contentSimpleInfos': <dynamic>[content],
-        };
-
-    final d = HuaweiAPI.parseDiscover(<String, dynamic>{
-      'result': <String, dynamic>{
-        'columnInfoExs': <dynamic>[
-          column('recom_exclusive', '8011', <String, dynamic>{
-            'contentType': '1',
-            ...song('rec-1', '私享好歌一'),
-          }),
-          column('recom_exclusive', '8011', <String, dynamic>{
-            'contentType': '1',
-            ...song('rec-2', '私享好歌二'),
-          }),
-          column('home-listen', 'listen', <String, dynamic>{
-            'contentType': '12',
-            'listRcmInfos': <dynamic>[song('listen-1', '现在就听一')],
-          }),
-          column('home-heart', 'heart', <String, dynamic>{
-            'contentType': '12',
-            'listRcmInfos': <dynamic>[song('heart-1', '心动模式一')],
-          }),
-          column('home-new', 'new', <String, dynamic>{
-            'contentType': '1',
-            ...song('new-1', '新歌推荐一'),
-          }),
-          column('home-hot', 'hot', <String, dynamic>{
-            'contentType': '1',
-            ...song('hot-1', '热歌速递一'),
-          }),
-        ],
-      },
-    });
-
-    expect(d.recommended.map((s) => s.id), <String>['rec-1', 'rec-2']);
-    expect(d.listen.map((s) => s.id), <String>['listen-1']);
-    expect(d.heart.map((s) => s.id), <String>['heart-1']);
-    expect(d.newSongs.map((s) => s.id), <String>['new-1']);
-    expect(d.hot.map((s) => s.id), <String>['hot-1']);
-    expect(d.recommendedColumnId, '8011');
-  });
-
-  test('首页未直接返回私享好歌时，按栏目 8011 拉详情', () async {
-    final api = HuaweiAPI(gateway: _HomeGateway());
-    final d = await api.discover();
-    expect(d.recommendedColumnId, '8011');
-    expect(d.recommended.map((s) => s.id), <String>[
-      'rec-8011-1',
-      'rec-8011-2',
-    ]);
-  });
-
-  test('首页 998 功能卡解析出 serviceType / 真实栏目ID / 封面', () {
-    final contentExInfo = jsonEncode(<String, dynamic>{
-      'realContentInfo': <String, dynamic>{
-        'contentID': 'a001',
-        'contentName': '每日30首',
-        'contentType': '4',
-        'extendInfo': jsonEncode(<String, dynamic>{
-          'serviceType': 'dailyrecommend',
-        }),
-      },
-    });
+  test('错误拼写 pfm001 / pfm002 不再触发 pmf001 内嵌批次', () {
     final d = HuaweiAPI.parseDiscover(<String, dynamic>{
       'result': <String, dynamic>{
         'columnInfoExs': <dynamic>[
           <String, dynamic>{
-            'columnInfo': <String, dynamic>{
-              'columnKey': 'recommend_for_you',
-              'contentID': 'NokMgDwyY3Y-i_Gln',
-              'contentName': '今日为你推荐',
-              'contentType': '998',
-            },
             'contentSimpleInfos': <dynamic>[
               <String, dynamic>{
-                'contentType': '998',
-                'contentID': 'card-daily',
-                'contentName': '每日30首',
-                'contentExInfo': contentExInfo,
-                'picture': <String, dynamic>{
-                  'bigImgURL':
-                      'https://contentcenter-drcn.dbankcdn.cn/img/daily.jpg',
-                },
+                'contentID': 'pfm001',
+                'contentType': '12',
+                'contentName': '错误功能卡',
+                'childSimpleInfos': <dynamic>[
+                  _batch('bad-1', '错误', <String>['错误歌曲']),
+                ],
+              },
+              <String, dynamic>{
+                'contentID': 'pfm002',
+                'contentType': '12',
+                'contentName': '错误功能卡二',
+                'listRcmInfos': <dynamic>[_song('bad-2', '错误歌曲二')],
               },
             ],
           },
         ],
       },
     });
-    expect(d.features, hasLength(1));
-    expect(d.features.single.serviceType, 'dailyrecommend');
-    expect(d.features.single.id, 'a001');
-    expect(d.features.single.title, '每日30首');
-    expect(d.features.single.cover.toString(), contains('dbankcdn.cn'));
-    expect(d.daily, isEmpty);
+    expect(d.listen, isEmpty);
+    expect(d.heart, isEmpty);
+    expect(d.newSongs, isEmpty);
+    expect(d.hot, isEmpty);
+  });
+
+  test('parseDiscover 按真实 contentType 分流，a001 只进 daily', () {
+    final d = HuaweiAPI.parseDiscover(<String, dynamic>{
+      'result': <String, dynamic>{
+        'columnInfoExs': <dynamic>[
+          <String, dynamic>{
+            'contentSimpleInfos': <dynamic>[
+              <String, dynamic>{
+                'contentType': '4',
+                'contentID': 'a001',
+                'contentName': '每日30首',
+                'listRcmInfos': <dynamic>[_song('daily-inline', '每日内嵌')],
+              },
+              <String, dynamic>{
+                'contentType': '7',
+                'contentID': '24926',
+                'chartName': '热歌榜',
+              },
+              <String, dynamic>{
+                'contentType': '2',
+                'albumID': 'album-1',
+                'albumName': '专辑一',
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(d.daily.map((s) => s.id), <String>['daily-inline']);
+    expect(d.charts.single.id, '24926');
+    expect(d.albums.single.id, 'album-1');
+    expect(d.recommended, isEmpty);
+  });
+
+  test('8011 栏目参数拼装 + 独立返回', () async {
+    final gateway = _FakeGateway();
+    final api = HuaweiAPI(gateway: gateway);
+    final songs = await api.featuredSongs();
+    expect(songs.single.id, 'rec-1');
+    expect(
+      gateway.gets.last,
+      contains('columnId=8011&start=0&limit=30&hasRecommend=1'),
+    );
+  });
+
+  test('a001 / privatefm / recommend playlist / 24926 各自独立请求', () async {
+    final gateway = _FakeGateway();
+    final api = HuaweiAPI(gateway: gateway);
+
+    final daily = await api.daily30();
+    expect(daily.single.id, 'daily-1');
+    expect(gateway.gets.last, contains('musicListID=a001'));
+    expect(gateway.gets.last, startsWith(HuaweiAPI.dailyPlaylistPath));
+
+    final fm = await api.privateFm(mode: '2');
+    expect(fm.single.id, 'fm-1');
+    expect(gateway.posts.last, contains('/recommend/privatefm'));
+    expect(gateway.posts.last, contains('"rcmMode":"2"'));
+
+    final lists = await api.recommendedPlaylists();
+    expect(lists.single.id, 'pl-1');
+    expect(lists.single.name, '推荐歌单一');
+    expect(gateway.posts.last, contains('/recommend/playlist'));
+
+    final charts = await api.chartSongs(HuaweiAPI.hotChartId);
+    expect(charts.single.id, 'chart-1');
+    expect(gateway.gets.last, contains('chartID=24926'));
+  });
+
+  test('discover 组合各独立来源，daily/recommended/listen 互不冒充', () async {
+    final gateway = _FakeGateway();
+    gateway.home = <String, dynamic>{
+      'result': <String, dynamic>{
+        'columnInfoExs': <dynamic>[
+          <String, dynamic>{
+            'contentSimpleInfos': <dynamic>[
+              <String, dynamic>{
+                'contentType': '4',
+                'contentID': 'a001',
+                'contentName': '每日30首',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    final api = HuaweiAPI(gateway: gateway);
+    final d = await api.discover();
+    expect(d.recommended.single.id, 'rec-1');
+    expect(d.daily.single.id, 'daily-1');
+    expect(d.listen.single.id, 'fm-1');
+    expect(d.recommendedColumnId, '8011');
+    expect(d.playlists.any((p) => p.id == 'pl-1'), isTrue);
+    expect(d.playlists.any((p) => p.id == 'a001'), isTrue);
+    expect(d.charts.any((p) => p.id == '24926'), isTrue);
+    expect(d.recommended.single.id, isNot(d.daily.single.id));
+    expect(d.recommended.single.id, isNot(d.listen.single.id));
+  });
+
+  test('990000：一次会话刷新重试 + 30 秒冷却', () async {
+    final gateway = _FakeGateway(fail990000Times: 1)..accountToken = 'acc';
+    final api = HuaweiAPI(gateway: gateway);
+    final songs = await api.daily30();
+    expect(songs.single.id, 'daily-1');
+    expect(gateway.musicTokenExchanges, 1);
+
+    final failing = _FakeGateway(fail990000Times: 100)..accountToken = 'acc';
+    final cooling = HuaweiAPI(gateway: failing);
+    await expectLater(cooling.daily30(), throwsA(isA<HuaweiException>()));
+    expect(cooling.isAuthCoolingDown, isTrue);
+    final exchanges = failing.musicTokenExchanges;
+    await expectLater(cooling.daily30(), throwsA(isA<HuaweiException>()));
+    expect(failing.musicTokenExchanges, exchanges);
   });
 
   test('parseSong 解析 artistNamePairs 的歌手名与 ID（REA HomeSongs 字段）', () {

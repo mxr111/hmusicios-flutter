@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../models_skin.dart';
-import '../protocol/huawei_api.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
@@ -21,6 +20,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _search = TextEditingController();
   int _recPage = 1;
+  int _chartPage = 1;
+  int _cardGroup = 0;
 
   @override
   void dispose() {
@@ -31,13 +32,15 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final songs = state.discover.recommended.isNotEmpty
-        ? state.discover.recommended
-        : state.homeSongs;
+    // 「为你推荐」只认 8011 私享好歌，不再回退 homeSongs。
+    final songs = state.discover.recommended;
     final pageCount = songs.isEmpty ? 1 : ((songs.length + 4) ~/ 5);
     final page = _recPage.clamp(1, pageCount);
     final visibleSongs = songs.skip((page - 1) * 5).take(5).toList();
     final playlists = state.discover.playlists;
+    final charts = state.discover.charts;
+    final chartCount = charts.isEmpty ? 1 : charts.length.clamp(1, 10);
+    final chartPage = _chartPage.clamp(1, chartCount);
     final cards = _cards(state);
 
     return ListView(
@@ -46,6 +49,7 @@ class _HomePageState extends State<HomePage> {
         _header(context, state),
         const SizedBox(height: 16),
         _heroCards(cards),
+        _cardGroupBar(),
         const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -72,7 +76,7 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.only(top: 8),
                   child: StatePanel(
                     message: state.error!,
-                    onRetry: state.loadHome,
+                    onRetry: () => state.refreshHome(force: true),
                     actionLabel: '重试',
                   ),
                 ),
@@ -80,8 +84,8 @@ class _HomePageState extends State<HomePage> {
                 const StatePanel(message: '尚未登录华为账号。请到「我的」扫码登录后加载真实曲库。')
               else if (!state.loading && songs.isEmpty)
                 StatePanel(
-                  message: '首页接口未返回歌曲，请重试。',
-                  onRetry: state.loadHome,
+                  message: '为你推荐（8011）未返回歌曲。',
+                  onRetry: () => state.refreshHome(force: true),
                   actionLabel: '重试',
                 )
               else
@@ -101,20 +105,38 @@ class _HomePageState extends State<HomePage> {
                 trailing: playlists.isEmpty
                     ? '暂无数据'
                     : '共 ${playlists.length} 个',
-                onNext: () {
-                  state.selectTab(2);
-                },
-                nextTooltip: '去音乐厅看榜单',
               ),
               const SizedBox(height: 12),
               if (playlists.isEmpty)
                 StatePanel(
-                  message: '华为接口未返回推荐歌单。',
-                  onRetry: state.loadHome,
+                  message: '暂无推荐歌单',
+                  onRetry: () => state.refreshHome(force: true),
                   actionLabel: '重试',
                 )
               else
-                _playlistGrid(playlists),
+                _playlistStrip(playlists),
+              const SizedBox(height: 26),
+              _sectionRow(
+                title: '热歌榜',
+                trailing: charts.isEmpty
+                    ? '暂无数据'
+                    : '$chartPage/${charts.length > 10 ? 10 : charts.length}',
+                onPrevious: chartPage > 1
+                    ? () => setState(() => _chartPage = chartPage - 1)
+                    : null,
+                onNext: chartPage < chartCount
+                    ? () => setState(() => _chartPage = chartPage + 1)
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              if (charts.isEmpty)
+                StatePanel(
+                  message: '暂无榜单数据',
+                  onRetry: () => state.refreshHome(force: true),
+                  actionLabel: '重试',
+                )
+              else
+                _hotChartPanel(charts[chartPage - 1]),
             ],
           ),
         ),
@@ -217,6 +239,31 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _cardGroupBar() {
+    final pal = widget.state.palette;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 0),
+      child: Row(
+        children: [
+          Text('上一组 / 下一组', style: TextStyle(fontSize: 12, color: pal.muted)),
+          const Spacer(),
+          TextButton(
+            onPressed: () => setState(() {
+              _cardGroup = _cardGroup == 0 ? 4 : _cardGroup - 1;
+            }),
+            child: const Text('上一组'),
+          ),
+          TextButton(
+            onPressed: () => setState(() {
+              _cardGroup = (_cardGroup + 1) % 5;
+            }),
+            child: const Text('下一组'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _sectionRow({
     required String title,
     required String trailing,
@@ -249,54 +296,87 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _playlistGrid(List<Playlist> playlists) {
-    final width = MediaQuery.of(context).size.width;
-    final columns = width > 1200 ? 6 : (width > 900 ? 5 : 3);
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columns,
-        childAspectRatio: width > 900 ? 0.78 : 0.62,
-        mainAxisSpacing: 16,
-        crossAxisSpacing: 16,
-      ),
-      itemCount: playlists.length,
-      itemBuilder: (context, i) {
-        final playlist = playlists[i];
-        return InkWell(
-          onTap: () => widget.state.openPlaylist(playlist),
-          borderRadius: BorderRadius.circular(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (context, box) => CoverArt(
-                    url: playlist.cover,
-                    size: box.maxWidth,
-                    radius: 12,
-                    seed: i,
+  Widget _playlistStrip(List<Playlist> playlists) {
+    return SizedBox(
+      height: 190,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: playlists.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 14),
+        itemBuilder: (context, i) {
+          final playlist = playlists[i];
+          return SizedBox(
+            width: 132,
+            child: InkWell(
+              onTap: () => widget.state.openPlaylist(playlist),
+              borderRadius: BorderRadius.circular(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CoverArt(url: playlist.cover, size: 132, radius: 12, seed: i),
+                  const SizedBox(height: 8),
+                  Text(
+                    playlist.name.isEmpty ? '未命名歌单' : playlist.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: widget.state.palette.text,
+                    ),
                   ),
-                ),
+                  if (playlist.songCount > 0)
+                    Text('${playlist.songCount} 首', style: MuyuTheme.muted),
+                ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                playlist.name.isEmpty ? '未命名歌单' : playlist.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: widget.state.palette.text,
-                ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _hotChartPanel(Playlist chart) {
+    final pal = widget.state.palette;
+    return InkWell(
+      onTap: () => widget.state.openPlaylist(chart),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: pal.surface,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            CoverArt(url: chart.cover, size: 64, radius: 10, seed: 3),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    chart.name.isEmpty ? '热歌榜' : chart.name,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: pal.text,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    chart.songCount > 0
+                        ? '${chart.songCount} 首 · chartID ${chart.id}'
+                        : 'chartID ${chart.id}',
+                    style: TextStyle(fontSize: 11, color: pal.muted),
+                  ),
+                ],
               ),
-              if (playlist.songCount > 0)
-                Text('${playlist.songCount} 首', style: MuyuTheme.muted),
-            ],
-          ),
-        );
-      },
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
     );
   }
 
@@ -309,43 +389,16 @@ class _HomePageState extends State<HomePage> {
     final newSongs = discover.newSongs;
     final heartSongs = discover.heart;
     final hotSongs = discover.hot;
-    final now = _firstOrNull(listen);
-    final dailySong = _firstOrNull(dailySongs);
-    final newSong = _firstOrNull(newSongs);
-    final heartSong = _firstOrNull(heartSongs);
-    final hotSong = _firstOrNull(hotSongs);
-    final listenFeature = _featureFor(
-      discover.features,
-      serviceTypes: const <String>['privatefm'],
-      ids: const <String>['pfm001'],
-    );
-    final dailyFeature = _featureFor(
-      discover.features,
-      serviceTypes: const <String>['dailyrecommend'],
-      ids: const <String>['a001'],
-    );
-    final heartFeature = _featureFor(
-      discover.features,
-      serviceTypes: const <String>['heartbeatfm'],
-      ids: const <String>['pfm002'],
-    );
-    final newFeature = _featureFor(
-      discover.features,
-      serviceTypes: const <String>['newsongrecommend'],
-      ids: const <String>['a003'],
-    );
-    final hotFeature = _featureFor(
-      discover.features,
-      serviceTypes: const <String>['millionfavoriterecommend'],
-      ids: const <String>['a006'],
-    );
+    Song? pick(List<Song> list) =>
+        list.isEmpty ? null : list[_cardGroup % list.length];
+    final now = pick(listen);
+    final dailySong = pick(dailySongs);
+    final newSong = pick(newSongs);
+    final heartSong = pick(heartSongs);
+    final hotSong = pick(hotSongs);
     final dailyPlaylist = _firstWhereOrNull(
       discover.playlists,
       (Playlist playlist) => playlist.id == 'a001',
-    );
-    final hotChart = _firstWhereOrNull(
-      discover.charts,
-      (Playlist playlist) => playlist.name.contains('热歌'),
     );
     final date = DateTime.now();
     const months = <String>[
@@ -372,78 +425,55 @@ class _HomePageState extends State<HomePage> {
     }
     String subtitle(Song? song, String emptyLabel) =>
         song == null ? emptyLabel : '${song.name} · ${song.artistText}';
-    String cardTitle(DiscoverFeature? feature, String fallback) =>
-        feature?.title.trim().isNotEmpty == true
-        ? feature!.title.trim()
-        : fallback;
     return <HomeCardSpec>[
       HomeCardSpec(
         badge: '♫  Music FM',
-        title: cardTitle(listenFeature, '现在就听'),
+        title: '现在就听',
         subtitle: subtitle(now, '暂无现在就听歌曲'),
         gradient: MuyuColors.cardNow,
         icon: Icons.radio,
         action: 'radio',
-        cover: listenFeature?.cover ?? now?.cover,
+        cover: now?.cover,
         covers: listenCovers,
       ),
       HomeCardSpec(
         badge: dateLabel,
-        title: cardTitle(dailyFeature, '每日30首'),
+        title: '每日30首',
         subtitle: subtitle(dailySong, '暂无每日30首歌曲'),
         gradient: MuyuColors.cardDaily,
         icon: Icons.calendar_month,
         action: 'daily',
-        cover: dailyFeature?.cover ?? dailyPlaylist?.cover ?? dailySong?.cover,
+        cover: dailyPlaylist?.cover ?? dailySong?.cover,
         bigText: '${date.day}',
       ),
       HomeCardSpec(
         badge: '♥',
-        title: cardTitle(heartFeature, '心动模式'),
+        title: '心动模式',
         subtitle: subtitle(heartSong, '暂无心动模式歌曲'),
         gradient: MuyuColors.cardHeart,
         icon: Icons.favorite,
         action: 'heart',
-        cover: heartFeature?.cover ?? heartSong?.cover,
+        cover: heartSong?.cover,
       ),
       HomeCardSpec(
         badge: '♫  New',
-        title: cardTitle(newFeature, '新歌推荐'),
+        title: '新歌推荐',
         subtitle: subtitle(newSong, '暂无新歌推荐'),
         gradient: MuyuColors.cardNew,
         icon: Icons.new_releases_outlined,
         action: 'new',
-        cover: newFeature?.cover ?? newSong?.cover,
+        cover: newSong?.cover,
       ),
       HomeCardSpec(
-        badge: cardTitle(hotFeature, '热歌速递'),
-        title: cardTitle(hotFeature, '热歌速递'),
-        subtitle:
-            subtitle(hotSong, hotChart?.name ?? '暂无热歌速递歌曲'),
+        badge: '♫  Hot',
+        title: '热歌速递',
+        subtitle: subtitle(hotSong, '暂无热歌速递歌曲'),
         gradient: MuyuColors.cardHot,
         icon: Icons.whatshot,
         action: 'hot',
-        cover: hotFeature?.cover ?? hotSong?.cover,
+        cover: hotSong?.cover,
       ),
     ];
-  }
-
-  static Song? _firstOrNull(List<Song> songs) =>
-      songs.isEmpty ? null : songs.first;
-
-  static DiscoverFeature? _featureFor(
-    List<DiscoverFeature> features, {
-    required List<String> serviceTypes,
-    required List<String> ids,
-  }) {
-    for (final feature in features) {
-      final serviceType = feature.serviceType.toLowerCase();
-      if (serviceTypes.contains(serviceType) ||
-          ids.contains(feature.id.toLowerCase())) {
-        return feature;
-      }
-    }
-    return null;
   }
 
   static T? _firstWhereOrNull<T>(Iterable<T> values, bool Function(T) test) {
@@ -454,23 +484,39 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _playCard(AppState state, String action) async {
+    List<Song> list;
     switch (action) {
       case 'radio':
-        var list = state.discover.listen;
-        if (list.isEmpty) {
-          await state.loadHome();
-          list = state.discover.listen;
-        }
-        if (list.isNotEmpty) {
-          await state.play(list.first, queue: list);
-        }
-        return;
+        list = state.discover.listen;
+        break;
       case 'daily':
-        var list = state.discover.daily;
-        if (list.isNotEmpty) {
-          await state.play(list.first, queue: list);
-          return;
-        }
+        list = state.discover.daily;
+        break;
+      case 'hot':
+        list = state.discover.hot;
+        break;
+      case 'heart':
+        list = state.discover.heart;
+        break;
+      case 'new':
+        list = state.discover.newSongs;
+        break;
+      default:
+        return;
+    }
+    if (list.isEmpty) {
+      // 只重试本板块；绝不借用其他卡片或 homeSongs。
+      await state.refreshHome(force: true);
+      list = switch (action) {
+        'radio' => state.discover.listen,
+        'daily' => state.discover.daily,
+        'hot' => state.discover.hot,
+        'heart' => state.discover.heart,
+        _ => state.discover.newSongs,
+      };
+    }
+    if (list.isEmpty) {
+      if (action == 'daily') {
         final daily = _firstWhereOrNull(
           state.discover.playlists,
           (Playlist playlist) => playlist.id == 'a001',
@@ -479,51 +525,13 @@ class _HomePageState extends State<HomePage> {
           await state.openPlaylist(daily);
           return;
         }
-        await state.loadHome();
-        list = state.discover.daily;
-        if (list.isNotEmpty) {
-          await state.play(list.first, queue: list);
-          return;
-        }
-        final refreshedDaily = _firstWhereOrNull(
-          state.discover.playlists,
-          (Playlist playlist) => playlist.id == 'a001',
-        );
-        if (refreshedDaily != null) {
-          await state.openPlaylist(refreshedDaily);
-        }
-        return;
-      case 'hot':
-        var list = state.discover.hot;
-        if (list.isEmpty) {
-          await state.loadHome();
-        }
-        list = state.discover.hot;
-        if (list.isNotEmpty) await state.play(list.first, queue: list);
-        return;
-      case 'heart':
-        var list = state.discover.heart;
-        if (list.isEmpty) {
-          await state.loadHome();
-          list = state.discover.heart;
-        }
-        if (list.isNotEmpty) {
-          await state.play(list.first, queue: list);
-        }
-        return;
-      case 'new':
-        var list = state.discover.newSongs;
-        if (list.isEmpty) {
-          await state.loadHome();
-          list = state.discover.newSongs;
-        }
-        if (list.isNotEmpty) {
-          await state.play(list.first, queue: list);
-        }
-        return;
-      default:
-        return;
+      }
+      state.error = '「$action」独立板块未返回歌曲（不回填其他列表）';
+      state.refresh();
+      return;
     }
+    final index = _cardGroup % list.length;
+    await state.play(list[index], queue: list);
   }
 }
 

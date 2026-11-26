@@ -88,8 +88,10 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
       await widget.state.api.signInWithCode(callback.code, _attempt.verifier);
       if (!mounted) return;
       widget.state.refresh();
-      widget.state.loadHome();
+      // 登录成功必须绕过 990000 的 30 秒冷却，真正重新拉首页。
+      await widget.state.refreshHome(force: true);
       widget.state.loadLibrary();
+      if (!mounted) return;
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop<bool>(true);
       }

@@ -16,8 +16,9 @@ import 'session_store.dart';
 
 /// 全局状态：零第三方状态管理，直接用 ChangeNotifier + AnimatedBuilder。
 class AppState extends ChangeNotifier {
-  AppState({SessionStore? sessionStore})
-      : _sessionStore = sessionStore ?? PreferencesSessionStore() {
+  AppState({SessionStore? sessionStore, HuaweiAPI? huaweiApi})
+    : _sessionStore = sessionStore ?? PreferencesSessionStore(),
+      api = huaweiApi ?? HuaweiAPI() {
     audio.addListener(notifyListeners);
     local.addListener(notifyListeners);
     // 授权码换到的账号 token / 音乐 token 变化时立刻持久化。
@@ -29,7 +30,7 @@ class AppState extends ChangeNotifier {
   }
 
   final SessionStore _sessionStore;
-  final HuaweiAPI api = HuaweiAPI();
+  final HuaweiAPI api;
   final NeteaseApi netease = NeteaseApi();
   final KugouApi kugou = KugouApi();
   final QqApi qq = QqApi();
@@ -38,37 +39,41 @@ class AppState extends ChangeNotifier {
   /// 当前音源（沐语支持多平台；本项目接通华为 + 网易云）。
   MusicSource source = MusicSource.huawei;
   bool get isLoggedIn => switch (source) {
-        MusicSource.huawei => api.isLoggedIn,
-        MusicSource.netease => netease.isLoggedIn,
-        MusicSource.kugou => kugou.isLoggedIn,
-        MusicSource.qq => qq.isLoggedIn,
-      };
+    MusicSource.huawei => api.isLoggedIn,
+    MusicSource.netease => netease.isLoggedIn,
+    MusicSource.kugou => kugou.isLoggedIn,
+    MusicSource.qq => qq.isLoggedIn,
+  };
 
   /// 当前音源的账号显示名（侧栏 / 我的页共用）。
   String get accountName => switch (source) {
-        MusicSource.huawei =>
-          api.displayName ?? (api.isLoggedIn ? '华为音乐用户' : '未登录'),
-        MusicSource.netease =>
-          (netease.gateway.session?.nickname.isNotEmpty ?? false)
-              ? netease.gateway.session!.nickname
-              : (netease.isLoggedIn ? '网易云用户' : '未登录'),
-        MusicSource.kugou => kugou.isLoggedIn ? kugou.displayName : '未登录',
-        MusicSource.qq => qq.isLoggedIn ? qq.displayName : '未登录',
-      };
+    MusicSource.huawei =>
+      api.displayName ?? (api.isLoggedIn ? '华为音乐用户' : '未登录'),
+    MusicSource.netease =>
+      (netease.gateway.session?.nickname.isNotEmpty ?? false)
+          ? netease.gateway.session!.nickname
+          : (netease.isLoggedIn ? '网易云用户' : '未登录'),
+    MusicSource.kugou => kugou.isLoggedIn ? kugou.displayName : '未登录',
+    MusicSource.qq => qq.isLoggedIn ? qq.displayName : '未登录',
+  };
 
   String get accountAvatar => source == MusicSource.huawei
       ? (api.avatarUrl ?? '')
       : (source == MusicSource.kugou
-          ? (kugou.gateway.session?.avatarUrl ?? '')
-          : '');
+            ? (kugou.gateway.session?.avatarUrl ?? '')
+            : '');
 
   String get accountMemberLabel => source == MusicSource.huawei
       ? (api.memberLabel ??
-          (api.isMember ? '华为音乐会员' : (api.isLoggedIn ? '华为音乐' : '')))
+            (api.isMember ? '华为音乐会员' : (api.isLoggedIn ? '华为音乐' : '')))
       : '';
 
-  late final MuyuAudioController audio =
-      MuyuAudioController(api, netease: netease, kugou: kugou, qq: qq);
+  late final MuyuAudioController audio = MuyuAudioController(
+    api,
+    netease: netease,
+    kugou: kugou,
+    qq: qq,
+  );
 
   int tab = 0;
   bool loading = false;
@@ -81,11 +86,12 @@ class AppState extends ChangeNotifier {
   int themeIndex = 0;
   int? _lastLightTheme;
   int? _lastDarkTheme = 6;
-  MuyuPalette get palette => kMuyuPalettes[themeIndex.clamp(0, kMuyuPalettes.length - 1)];
+  MuyuPalette get palette =>
+      kMuyuPalettes[themeIndex.clamp(0, kMuyuPalettes.length - 1)];
   bool get darkMode => palette.dark; // 兼容旧 ThemeMode 逻辑
   int homePage = 1;
   int _homeRefreshSeed = 0;
-  bool _homeLoading = false;
+  Future<void>? _homeInFlight;
   DateTime? _homeRetryBlockedUntil;
 
   /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
@@ -161,6 +167,7 @@ class AppState extends ChangeNotifier {
     favoriteFilter = source;
     notifyListeners();
   }
+
   void closeFavorites() {
     favoriteFilter = null;
     notifyListeners();
@@ -175,7 +182,7 @@ class AppState extends ChangeNotifier {
   String? commentsForSong;
 
   /// 首页数据：华为发现页与网易云独立首页严格分开，只走真实接口。
-  Future<void> loadHome() async {
+  Future<void> loadHome({bool force = false}) async {
     if (source == MusicSource.netease) {
       await loadNeteaseHome();
       return;
@@ -188,125 +195,71 @@ class AppState extends ChangeNotifier {
       await loadQqHome();
       return;
     }
-    if (_homeLoading) return;
+    if (force) {
+      _homeRetryBlockedUntil = null;
+      api.clearAuthCooldown();
+    }
+    final running = _homeInFlight;
+    if (running != null) {
+      if (!force) return running;
+      await running;
+      return loadHome(force: true);
+    }
     final now = DateTime.now();
-    if (_homeRetryBlockedUntil != null && now.isBefore(_homeRetryBlockedUntil!)) {
+    if (!force &&
+        _homeRetryBlockedUntil != null &&
+        now.isBefore(_homeRetryBlockedUntil!)) {
       return;
     }
-    _homeLoading = true;
+    final future = _loadHuaweiHome();
+    _homeInFlight = future;
     try {
-      await _guard(() async {
-        var data = await api.discover();
-        if (data.features.isNotEmpty) {
-          data = await _hydrateHomeFeatures(data);
-        }
-        // 首页聚合接口偶发返回空结构：改用推荐歌单/榜单两个独立服务兜底，
-        // 仍是真实接口数据，不填假歌。
-        if (data.newSongs.isEmpty &&
-            data.playlists.isEmpty &&
-            data.charts.isEmpty &&
-            data.radio.isEmpty) {
-          final lists = await _soft(api.recommendedPlaylists(), <Playlist>[]);
-          final charts = await _soft(api.charts(), <Playlist>[]);
-          if (lists.isNotEmpty || charts.isNotEmpty) {
-            data = DiscoverData(playlists: lists, charts: charts);
-          }
-        }
-        discover = _rotateDiscover(data);
-        // 「为你推荐」是独立私享好歌流，不再拿「新歌推荐」冒充。
-        homeSongs = discover.recommended.isNotEmpty
-            ? discover.recommended
-            : (discover.radio.isNotEmpty
-                ? discover.radio
-                : discover.newSongs);
-        playlists = discover.playlists;
-        charts = discover.charts;
-        discoverLoaded = true;
-      });
+      await future;
     } finally {
-      _homeLoading = false;
+      if (identical(_homeInFlight, future)) _homeInFlight = null;
     }
   }
 
-  /// 首页「刷新」：服务端同一账号的推荐接口目前返回同一批内容，
-  /// 这里在真实数据上做确定性的轮换，保证每次刷新首屏会变化。
-  Future<void> refreshHome() async {
+  Future<void> _loadHuaweiHome() async {
+    await _guard(() async {
+      final data = await api.discover();
+      discover = _rotateDiscover(data);
+      // homeSongs 只做全局默认播放入口，不再作为各卡片的公共 fallback。
+      homeSongs = discover.recommended;
+      playlists = discover.playlists;
+      charts = discover.charts;
+      discoverLoaded =
+          discover.listen.isNotEmpty ||
+          discover.daily.isNotEmpty ||
+          discover.heart.isNotEmpty ||
+          discover.newSongs.isNotEmpty ||
+          discover.hot.isNotEmpty ||
+          discover.recommended.isNotEmpty;
+    });
+  }
+
+  /// 首页刷新：清 30 秒冷却并强制重新请求；登录回调也走这里。
+  Future<void> refreshHome({bool force = true}) async {
     _homeRetryBlockedUntil = null;
+    api.clearAuthCooldown();
     _homeRefreshSeed++;
-    await loadHome();
-  }
-
-  /// 首页 6 张功能卡分别有自己的真实曲库。日志里「除了每日30首其他都一样」
-  /// 的根因是旧实现只拿到新歌列表，其余卡片全 fallback 到 homeSongs.first。
-  /// 这里按 serviceType 并发拉取 a001/a003/a004/a006，互不复用。
-  Future<DiscoverData> _hydrateHomeFeatures(DiscoverData data) async {
-    String idFor(String serviceType, String fallback) {
-      for (final feature in data.features) {
-        if (feature.serviceType == serviceType && feature.id.isNotEmpty) {
-          return feature.id;
-        }
-      }
-      return fallback;
-    }
-
-    Future<List<Song>> fetch(String id) => _soft(
-          api.playlistSongs(
-            Playlist(id: id, name: id, kind: 'collected'),
-            fetchAll: false,
-            limit: 30,
-          ),
-          <Song>[],
-        );
-
-    final ids = <String>[
-      idFor('dailyrecommend', 'a001'),
-      idFor('newsongrecommend', 'a003'),
-      idFor('favoritesrecommend', 'a004'),
-      idFor('millionfavoriterecommend', 'a006'),
-    ];
-    final results = await Future.wait<List<Song>>(
-      ids.map(fetch).toList(),
-    );
-    final daily = results[0];
-    final news = results[1];
-    final personal = results[2];
-    final hot = results[3];
-    final recommended = personal.isNotEmpty
-        ? personal
-        : (hot.isNotEmpty ? hot : (daily.isNotEmpty ? daily : data.recommended));
-    final listen = personal.isNotEmpty
-        ? personal
-        : (hot.isNotEmpty ? hot : (daily.isNotEmpty ? daily : data.listen));
-    final heart = personal.isNotEmpty && hot.isNotEmpty
-        ? hot
-        : (daily.isNotEmpty ? daily : data.heart);
-    final newSongs = news.isNotEmpty ? news : data.newSongs;
-    final hotSongs = hot.isNotEmpty ? hot : data.hot;
-
-    return data.copyWith(
-      daily: daily,
-      newSongs: newSongs,
-      recommended: recommended,
-      listen: listen,
-      heart: heart,
-      hot: hotSongs,
-      features: data.features,
-    );
+    await loadHome(force: force);
   }
 
   DiscoverData _rotateDiscover(DiscoverData data) {
     if (_homeRefreshSeed == 0) return data;
+    // 只在本列表内轮换；绝不在卡片之间复制数据。
     return DiscoverData(
       banners: data.banners,
       newSongs: _rotate(data.newSongs),
       playlists: _rotate(data.playlists),
-      charts: data.charts,
+      charts: _rotate(data.charts),
       radio: _rotate(data.radio),
       albums: _rotate(data.albums),
       recommended: _rotate(data.recommended),
       listen: _rotate(data.listen),
       heart: _rotate(data.heart),
-      hot: data.hot,
+      hot: _rotate(data.hot),
       recommendedColumnId: data.recommendedColumnId,
       features: data.features,
       daily: _rotate(data.daily),
@@ -478,19 +431,17 @@ class AppState extends ChangeNotifier {
     playlistSongsList = <Song>[];
     showLyrics = false;
     notifyListeners();
-    playlistSongsList = await _soft(
-      switch (source) {
-        MusicSource.netease => netease.playlistTracks(playlist.id),
-        MusicSource.kugou => kugou.playlistTracks(playlist.id),
-        MusicSource.qq => qq.playlistTracks(playlist.id),
-        MusicSource.huawei => playlist.kind == 'album'
+    playlistSongsList = await _soft(switch (source) {
+      MusicSource.netease => netease.playlistTracks(playlist.id),
+      MusicSource.kugou => kugou.playlistTracks(playlist.id),
+      MusicSource.qq => qq.playlistTracks(playlist.id),
+      MusicSource.huawei =>
+        playlist.kind == 'album'
             ? api.albumSongs(playlist.id)
             : playlist.kind == 'chart'
-                ? api.chartSongs(playlist.id)
-                : api.playlistSongs(playlist),
-      },
-      <Song>[],
-    );
+            ? api.chartSongs(playlist.id)
+            : api.playlistSongs(playlist),
+    }, <Song>[]);
     notifyListeners();
   }
 
@@ -513,15 +464,18 @@ class AppState extends ChangeNotifier {
         source == MusicSource.netease
             ? netease.search(activeArtist!.name)
             : source == MusicSource.kugou
-                ? kugou.search(activeArtist!.name)
-                : qq.search(activeArtist!.name),
+            ? kugou.search(activeArtist!.name)
+            : qq.search(activeArtist!.name),
         <Song>[],
       );
       notifyListeners();
       return;
     }
     final results = await Future.wait<dynamic>(<Future<dynamic>>[
-      _soft<dynamic>(api.artistDetail(artistCode), const Artist(id: '', name: '')),
+      _soft<dynamic>(
+        api.artistDetail(artistCode),
+        const Artist(id: '', name: ''),
+      ),
       _soft<dynamic>(api.artistSongs(artistCode), <Song>[]),
     ]);
     if (results[0] is Artist && (results[0] as Artist).name.isNotEmpty) {
@@ -554,15 +508,12 @@ class AppState extends ChangeNotifier {
     commentsForSong = songCode;
     comments = <Comment>[];
     notifyListeners();
-    comments = await _soft(
-      switch (source) {
-        MusicSource.netease => netease.comments(songCode),
-        MusicSource.kugou => kugou.comments(songCode),
-        MusicSource.qq => qq.comments(songCode),
-        MusicSource.huawei => api.comments(songCode),
-      },
-      <Comment>[],
-    );
+    comments = await _soft(switch (source) {
+      MusicSource.netease => netease.comments(songCode),
+      MusicSource.kugou => kugou.comments(songCode),
+      MusicSource.qq => qq.comments(songCode),
+      MusicSource.huawei => api.comments(songCode),
+    }, <Comment>[]);
     notifyListeners();
   }
 
@@ -612,7 +563,9 @@ class AppState extends ChangeNotifier {
     await _guard(() async {
       if (source == MusicSource.netease) {
         playlists = await _soft(
-            netease.userPlaylists(''), <Playlist>[]); // uid 由登录后填
+          netease.userPlaylists(''),
+          <Playlist>[],
+        ); // uid 由登录后填
       } else if (source == MusicSource.kugou) {
         playlists = await _soft(kugou.userPlaylists(), <Playlist>[]);
       } else if (source == MusicSource.qq) {
@@ -677,28 +630,30 @@ class AppState extends ChangeNotifier {
         case 'radio':
           songs = ne
               ? (neteaseHome.radioSongs.isNotEmpty
-                  ? neteaseHome.radioSongs
-                  : await netease.privateFm())
+                    ? neteaseHome.radioSongs
+                    : await netease.privateFm())
               : await api.privateRadio(mode: '1');
           break;
         case 'daily':
           songs = ne
               ? (neteaseHome.dailySongs.isNotEmpty
-                  ? neteaseHome.dailySongs
-                  : await netease.dailySongs())
-              : await api.dailySongs();
+                    ? neteaseHome.dailySongs
+                    : await netease.dailySongs())
+              : (discover.daily.isNotEmpty
+                    ? discover.daily
+                    : await api.daily30());
           break;
         case 'heart':
           songs = ne
               ? (neteaseHome.dailySongs.isNotEmpty
-                  ? neteaseHome.dailySongs
-                  : await netease.dailySongs())
+                    ? neteaseHome.dailySongs
+                    : await netease.dailySongs())
               : await api.privateRadio(mode: '2');
           break;
         case 'new':
           songs = discover.newSongs.isNotEmpty
               ? discover.newSongs
-              : (ne ? await netease.newSongs() : await api.dailySongs());
+              : (ne ? await netease.newSongs() : const <Song>[]);
           break;
         case 'hot':
           if (ne) {
@@ -706,10 +661,7 @@ class AppState extends ChangeNotifier {
                 ? discover.newSongs
                 : await netease.newSongs();
           } else {
-            songs = await api.similarSongs(
-              audio.current?.id ?? (homeSongs.isNotEmpty ? homeSongs.first.id : ''),
-            );
-            if (songs.isEmpty) songs = discover.newSongs;
+            songs = discover.hot;
           }
           break;
         default:
@@ -886,7 +838,7 @@ class AppState extends ChangeNotifier {
     api.signInWithToken(token);
     notifyListeners();
     persistSession();
-    loadHome();
+    refreshHome(force: true);
     loadLibrary();
   }
 
@@ -905,8 +857,9 @@ class AppState extends ChangeNotifier {
             : null,
         nick: snapshot.huaweiNickname,
       );
-      api.avatarUrl =
-          snapshot.huaweiAvatar.isEmpty ? null : snapshot.huaweiAvatar;
+      api.avatarUrl = snapshot.huaweiAvatar.isEmpty
+          ? null
+          : snapshot.huaweiAvatar;
       api.memberLabel = snapshot.huaweiMemberLabel.isEmpty
           ? null
           : snapshot.huaweiMemberLabel;
@@ -923,9 +876,7 @@ class AppState extends ChangeNotifier {
       );
     }
     if (snapshot.kugouCookies.isNotEmpty) {
-      kugou.signInWithCookies(
-        Map<String, dynamic>.from(snapshot.kugouCookies),
-      );
+      kugou.signInWithCookies(Map<String, dynamic>.from(snapshot.kugouCookies));
     }
     if (snapshot.qqCookies.isNotEmpty) {
       qq.signInWithCookies(Map<String, dynamic>.from(snapshot.qqCookies));
@@ -946,23 +897,26 @@ class AppState extends ChangeNotifier {
 
   /// 登录成功后落盘；凭证变化（401 自动换会话）也会回调到这里。
   Future<void> persistSession() async {
-    await _sessionStore.write(SessionSnapshot(
-      source: source.name,
-      huaweiToken: api.gateway.session?.token ?? '',
-      huaweiUserId: api.gateway.session?.snsUserId ?? '',
-      huaweiAccountToken: api.gateway.accountToken ?? '',
-      huaweiNickname: api.displayName ?? '',
-      huaweiAvatar: api.avatarUrl ?? '',
-      huaweiMemberLabel: api.memberLabel ?? '',
-      huaweiIsMember: api.isMember,
-      neteaseMusicU: netease.gateway.session?.musicU ?? '',
-      neteaseCsrf: netease.gateway.session?.csrf ?? '',
-      neteaseNickname: netease.gateway.session?.nickname ?? '',
-      neteaseUserId: netease.gateway.session?.userId ?? '',
-      kugouCookies: kugou.gateway.session?.cookies ?? const <String, String>{},
-      qqCookies: qq.gateway.session?.cookies ?? const <String, String>{},
-      themeIndex: themeIndex,
-    ));
+    await _sessionStore.write(
+      SessionSnapshot(
+        source: source.name,
+        huaweiToken: api.gateway.session?.token ?? '',
+        huaweiUserId: api.gateway.session?.snsUserId ?? '',
+        huaweiAccountToken: api.gateway.accountToken ?? '',
+        huaweiNickname: api.displayName ?? '',
+        huaweiAvatar: api.avatarUrl ?? '',
+        huaweiMemberLabel: api.memberLabel ?? '',
+        huaweiIsMember: api.isMember,
+        neteaseMusicU: netease.gateway.session?.musicU ?? '',
+        neteaseCsrf: netease.gateway.session?.csrf ?? '',
+        neteaseNickname: netease.gateway.session?.nickname ?? '',
+        neteaseUserId: netease.gateway.session?.userId ?? '',
+        kugouCookies:
+            kugou.gateway.session?.cookies ?? const <String, String>{},
+        qqCookies: qq.gateway.session?.cookies ?? const <String, String>{},
+        themeIndex: themeIndex,
+      ),
+    );
   }
 
   void signOut() {
@@ -997,8 +951,9 @@ class AppState extends ChangeNotifier {
       if (error!.contains('990000') || error!.contains('重新登录')) {
         // 日志里 990000 会在 5 秒内连打 20 次首页请求；鉴权失败时
         // 冷却 30 秒，等待用户重新登录，不再自动风暴重试。
-        _homeRetryBlockedUntil =
-            DateTime.now().add(const Duration(seconds: 30));
+        _homeRetryBlockedUntil = DateTime.now().add(
+          const Duration(seconds: 30),
+        );
       }
       AppLog.add('state', error!);
       onError?.call(error!);
