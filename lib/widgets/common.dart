@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../services/app_state.dart';
 import '../theme.dart';
 
 /// 封面：有 URL 走网络图，失败/无 URL 时用渐变占位（保证离线也有完整界面）。
@@ -319,6 +320,32 @@ class TinyIconButton extends StatelessWidget {
     );
     return tooltip == null ? child : Tooltip(message: tooltip!, child: child);
   }
+}
+
+/// 统一播放入口：空 ID / 播放失败必须在 UI 给出可读提示，不能静默。
+/// 全局 [AppState.onError] 存在时（正式 App 由 main 统一弹 SnackBar）不重复提示。
+Future<void> playSongFromList(
+  BuildContext context,
+  AppState state,
+  Song song,
+  List<Song> queue,
+) async {
+  if (song.id.trim().isEmpty) {
+    _showPlaybackMessage(context, '无法播放「${song.name}」：歌曲 ID 为空');
+    return;
+  }
+  await state.play(song, queue: queue);
+  if (!context.mounted) return;
+  final message = state.error;
+  if (message == null || message.isEmpty || state.onError != null) return;
+  _showPlaybackMessage(context, '播放失败：$message');
+}
+
+void _showPlaybackMessage(BuildContext context, String message) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.maybeOf(context)
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
 }
 
 /// 歌曲行：截图「为你推荐」下的封面 + 歌名 + 歌手 + 收藏 + 书签

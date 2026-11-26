@@ -4,8 +4,40 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/protocol/endpoints.dart';
+import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/protocol/huawei_gateway.dart';
 import 'package:muyu_flutter/protocol/huawei_oauth.dart';
+import 'package:muyu_flutter/services/session_store.dart';
+
+class _AuthRetryGateway extends HuaweiGateway {
+  _AuthRetryGateway(this.failure);
+
+  final Object failure;
+  int calls = 0;
+  int exchanges = 0;
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    calls++;
+    if (calls == 1) throw failure;
+    return <String, dynamic>{
+      'result': <String, dynamic>{
+        'songSimpleInfos': <dynamic>[
+          <String, dynamic>{'contentID': 'daily-1', 'contentName': '每日一'},
+        ],
+      },
+    };
+  }
+
+  @override
+  Future<MusicSession> exchangeMusicToken(String accessToken) async {
+    exchanges++;
+    final updated = MusicSession(token: 'new-token', snsUserId: 'user');
+    session = updated;
+    accountToken = accessToken;
+    return updated;
+  }
+}
 
 void main() {
   test('PKCE challenge 与 verifier 严格对应（S256 / 无 padding）', () {
@@ -74,5 +106,56 @@ void main() {
       () => a.accept('hms://redirect_uri?code=x&state=${a.state}'),
       throwsA(isA<HuaweiException>()),
     );
+  });
+
+  test('MusicSession expireTime 决定 isLoggedIn', () {
+    final gateway = HuaweiGateway();
+    final api = HuaweiAPI(gateway: gateway);
+
+    gateway.session = MusicSession(
+      token: 't',
+      snsUserId: 'u',
+      expireTime: '2020-01-01T00:00:00Z',
+    );
+    expect(api.isLoggedIn, isFalse);
+
+    gateway.session = MusicSession(
+      token: 't',
+      snsUserId: 'u',
+      expireTime: DateTime.now()
+          .add(const Duration(hours: 1))
+          .toUtc()
+          .toIso8601String(),
+    );
+    expect(api.isLoggedIn, isTrue);
+
+    gateway.session = MusicSession(token: 't', snsUserId: 'u');
+    expect(api.isLoggedIn, isTrue, reason: '上游未给 expireTime 时保持兼容');
+  });
+
+  test('990000 / 990006 / 401 都触发一次会话刷新并重试', () async {
+    for (final failure in <Object>[
+      HuaweiBusinessException('990000', '鉴权失败'),
+      const HuaweiException('华为服务返回 990006：User token expired!'),
+      const HuaweiException('登录已失效，请重新扫码登录', statusCode: 401),
+    ]) {
+      final gateway = _AuthRetryGateway(failure)..accountToken = 'account';
+      final api = HuaweiAPI(gateway: gateway);
+      final songs = await api.daily30();
+      expect(songs.single.id, 'daily-1');
+      expect(gateway.exchanges, 1);
+    }
+  });
+
+  test('会话快照分开保存 accountToken / refreshToken / expireTime', () {
+    const snapshot = SessionSnapshot(
+      huaweiAccountToken: 'account-token',
+      huaweiRefreshToken: 'refresh-token',
+      huaweiExpireTime: '2026-12-01T00:00:00Z',
+    );
+    final restored = SessionSnapshot.fromJson(snapshot.toJson());
+    expect(restored.huaweiAccountToken, 'account-token');
+    expect(restored.huaweiRefreshToken, 'refresh-token');
+    expect(restored.huaweiExpireTime, '2026-12-01T00:00:00Z');
   });
 }

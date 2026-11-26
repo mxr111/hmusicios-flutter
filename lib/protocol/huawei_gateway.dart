@@ -16,6 +16,57 @@ class HuaweiException implements Exception {
   String toString() => message;
 }
 
+/// 带业务码的网关错误。取流层需要按 142411/142400 继续降档，
+/// 而不是把异常当成“整首歌不可播”直接终止。
+class HuaweiBusinessException extends HuaweiException {
+  HuaweiBusinessException(
+    this.code,
+    this.detail, {
+    this.path,
+    int? statusCode,
+  }) : super(
+         '华为服务返回 $code${detail.isEmpty ? '' : '：$detail'}',
+         statusCode:
+             statusCode ??
+             (isAuthBusinessError(code, detail) ? 401 : null),
+       );
+
+  final String code;
+  final String detail;
+  final String? path;
+
+  /// 鉴权类业务码 / 文案：取流层必须立即交回上层重新登录，
+  /// 不能当成“当前档位不可用”继续降档，也不能被跳歌逻辑吞掉。
+  bool get isAuthFailure =>
+      statusCode == 401 || isAuthBusinessError(code, detail);
+
+  static bool isAuthBusinessError(String code, String detail) {
+    if (code == '401' || code == '990000' || code == '990006') return true;
+    final lower = detail.toLowerCase();
+    return lower.contains('token expired') ||
+        lower.contains('token has expired') ||
+        detail.contains('token已过期') ||
+        detail.contains('令牌已过期') ||
+        detail.contains('登录已失效') ||
+        detail.contains('登录已过期') ||
+        detail.contains('会话已过期') ||
+        detail.contains('重新扫码') ||
+        detail.contains('鉴权失败');
+  }
+
+  bool get isVipOnly =>
+      code == '142411' ||
+      detail.toLowerCase().contains('super diamond vip') ||
+      detail.contains('超级钻石');
+
+  bool get isUnavailable =>
+      code == '142400' ||
+      isVipOnly ||
+      detail.contains('没有可用') ||
+      detail.contains('无版权') ||
+      detail.contains('不可播放');
+}
+
 class _RawResponse {
   const _RawResponse(this.statusCode, this.body);
   final int statusCode;
@@ -33,6 +84,26 @@ class MusicSession {
   final String token;
   final String snsUserId;
   final String expireTime;
+
+  /// 华为 loginex 的 expireTime 可能是 ISO8601，也可能是秒/毫秒时间戳。
+  /// 空值表示上游没有给出有效期，此时保持兼容（按未过期处理）。
+  bool get isExpired {
+    final raw = expireTime.trim();
+    if (raw.isEmpty) return false;
+    DateTime? at = DateTime.tryParse(raw);
+    if (at == null) {
+      final n = int.tryParse(raw);
+      if (n == null) return false;
+      final ms = n > 1000000000000
+          ? n
+          : (n > 1000000000 ? n * 1000 : n);
+      at = DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    // 允许 2 分钟时钟偏差，避免设备时间略快时把有效会话误判为过期。
+    return at.isBefore(
+      DateTime.now().subtract(const Duration(minutes: 2)),
+    );
+  }
 }
 
 /// 华为音乐网关。
@@ -283,10 +354,15 @@ class HuaweiGateway {
       }
       final resp = await req.close();
       final text = await resp.transform(utf8.decoder).join();
-      AppLog.add(
-        'http',
-        '$method ${url.path} -> ${resp.statusCode} ${text.length}B',
-      );
+      final line =
+          '$method ${url.path} -> ${resp.statusCode} ${text.length}B';
+      if (resp.statusCode >= 400) {
+        // 4xx 往往只有几十字节；不记录 body 时以后无法区分字段错误、
+        // 方法错误还是鉴权错误。只截断并脱敏，不打印请求头/token。
+        AppLog.add('http', '$line body=${_snippet(text)}');
+      } else {
+        AppLog.add('http', line);
+      }
       return _RawResponse(resp.statusCode, text);
     } on HuaweiException {
       rethrow;
@@ -342,35 +418,69 @@ class HuaweiGateway {
       // 业务码：源码事实 result.resultCode == 000000；
       // OAuth token 端点无 result 信封，直接返回 access_token。
       final result = decoded['result'];
-      if (result is Map) {
-        final code = firstString(Map<String, dynamic>.from(result), const [
-          'resultCode',
-        ]);
-        final msg =
-            firstString(Map<String, dynamic>.from(result), const [
-              'resultMessage',
-            ]) ??
-            '';
-        if (code != null && code != HuaweiPaths.successCode) {
-          AppLog.add('api', '$path -> $code ${msg.isEmpty ? '' : msg}');
-          if (code == '142400') {
-            throw const HuaweiException('该歌曲当前不可播放（无版权 / 已下架 / 会员限制）');
-          }
-          if (code == '990000') {
-            throw const HuaweiException('华为鉴权失败，请重新登录华为账号');
-          }
-          final lower = msg.toLowerCase();
-          if (code == '401' ||
-              lower.contains('token expired') ||
-              lower.contains('token has expired') ||
-              msg.contains('token已过期') ||
-              msg.contains('令牌已过期') ||
-              msg.contains('登录已过期') ||
-              msg.contains('会话已过期')) {
-            throw const HuaweiException('登录已失效，请重新扫码登录', statusCode: 401);
-          }
-          throw HuaweiException('华为服务返回 $code：$path');
+      final resultMap = result is Map
+          ? Map<String, dynamic>.from(result)
+          : const <String, dynamic>{};
+      final code =
+          firstString(resultMap, const ['resultCode']) ??
+          firstString(decoded, const ['resultCode', 'code']);
+      final msg =
+          firstString(resultMap, const ['resultMessage', 'message', 'msg']) ??
+          firstString(decoded, const ['resultMessage', 'message', 'msg']) ??
+          '';
+      if (code != null && code != HuaweiPaths.successCode) {
+        AppLog.add(
+          'api',
+          '$path -> $code ${msg.isEmpty ? '' : msg} '
+              'body=${_snippet(raw.body)}',
+        );
+        final lower = msg.toLowerCase();
+        if (code == '142400') {
+          throw HuaweiBusinessException(
+            code,
+            msg.isEmpty ? '该歌曲当前不可播放（无版权 / 已下架 / 会员限制）' : msg,
+            path: path,
+          );
         }
+        if (code == '142411' ||
+            lower.contains('only super diamond vip') ||
+            lower.contains('super diamond vip') ||
+            msg.contains('超级钻石')) {
+          throw HuaweiBusinessException(
+            code,
+            msg.isEmpty
+                ? 'Only super diamond vip user can play the content!'
+                : msg,
+            path: path,
+          );
+        }
+        if (code == '990000') {
+          throw HuaweiBusinessException(
+            code,
+            msg.isEmpty
+                ? '华为鉴权失败，请重新登录华为账号'
+                : '华为鉴权失败，请重新登录华为账号：$msg',
+            path: path,
+          );
+        }
+        if (code == '990006' ||
+            code == '401' ||
+            lower.contains('token expired') ||
+            lower.contains('token has expired') ||
+            msg.contains('token已过期') ||
+            msg.contains('令牌已过期') ||
+            msg.contains('登录已失效') ||
+            msg.contains('登录已过期') ||
+            msg.contains('会话已过期') ||
+            msg.contains('重新扫码')) {
+          throw HuaweiBusinessException(
+            code,
+            msg.isEmpty ? '登录已失效，请重新扫码登录' : msg,
+            path: path,
+            statusCode: 401,
+          );
+        }
+        throw HuaweiBusinessException(code, msg, path: path);
       }
       if (raw.statusCode < 200 || raw.statusCode >= 300) {
         throw HuaweiException(
@@ -425,6 +535,21 @@ class HuaweiGateway {
     final direct = Uri.tryParse(s);
     if (direct != null && direct.hasScheme) return direct;
     return Uri.tryParse('https:${s.startsWith('//') ? '' : '//'}$s');
+  }
+
+  /// 日志用响应体摘要：折叠空白、截断，并把 token 一类字段替换为 ***。
+  static String _snippet(String raw, {int limit = 300}) {
+    var text = raw.replaceAllMapped(
+      RegExp(
+        r'(token|access_token|accessToken|refresh_token|refreshToken|authorization)'
+        r'("?\s*[:=]\s*"?)[^"&\s,}]+',
+        caseSensitive: false,
+      ),
+      (m) => '${m.group(1)}${m.group(2)}***',
+    );
+    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.length > limit) text = '${text.substring(0, limit)}…';
+    return text;
   }
 
   /// 在嵌套响应里找第一个非空字符串（华为资料常包在 data/profile 下）。

@@ -2,8 +2,10 @@
 // 提前抓 analyze 发现不了的运行时构建错误（布局溢出、空数据、null 访问）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/models_skin.dart';
 import 'package:muyu_flutter/pages/secondary_pages.dart';
+import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/services/app_state.dart';
 import 'package:muyu_flutter/theme.dart';
 import 'package:muyu_flutter/widgets/discover_page.dart';
@@ -147,4 +149,68 @@ void main() {
     expect(find.text('沉浸光感'), findsOneWidget);
     state.dispose();
   });
+
+  testWidgets('音乐厅榜单入口按 chart 类型打开，不再当普通歌单', (tester) async {
+    final state = _UiProbeState();
+    state.discover = const DiscoverData(
+      charts: <Playlist>[
+        Playlist(id: '24926', name: '热歌榜', kind: 'chart', songCount: 200),
+      ],
+    );
+    await tester.binding.setSurfaceSize(const Size(900, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: DiscoverPage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('热歌榜'));
+    await tester.pump();
+    expect(state.openedPlaylists, hasLength(1));
+    expect(state.openedPlaylists.single.id, '24926');
+    expect(state.openedPlaylists.single.kind, 'chart');
+    state.dispose();
+  });
+
+  testWidgets('搜索歌曲 ID 为空时给出 SnackBar，不静默无反应', (tester) async {
+    final state = _UiProbeState();
+    state.searchResults = <Song>[
+      Song(id: '', name: '缺少ID的歌', artists: const <String>['未知']),
+    ];
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: SearchPage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('缺少ID的歌'));
+    await tester.pump();
+    expect(find.textContaining('歌曲 ID 为空'), findsOneWidget);
+    expect(state.playedIds, isEmpty);
+    state.dispose();
+  });
+}
+
+class _UiProbeState extends AppState {
+  final List<Playlist> openedPlaylists = <Playlist>[];
+  final List<String> playedIds = <String>[];
+
+  @override
+  Future<void> openPlaylist(Playlist playlist) async {
+    openedPlaylists.add(playlist);
+    activePlaylist = playlist;
+    playlistSongsList = <Song>[];
+    refresh();
+  }
+
+  @override
+  Future<void> play(Song song, {List<Song>? queue}) async {
+    playedIds.add(song.id);
+    refresh();
+  }
 }

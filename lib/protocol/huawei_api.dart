@@ -154,7 +154,10 @@ class HuaweiAPI {
   }
 
   /// 源码事实：必须有音乐会话（token + snsUserID）才能发业务请求。
-  bool get isLoggedIn => gateway.session != null;
+  bool get isLoggedIn {
+    final session = gateway.session;
+    return session != null && !session.isExpired;
+  }
 
   /// 手动填入音乐 token + snsUserID（调试用，跳过 OAuth 流程）。
   void signInWithSession(String musicToken, String snsUserId, {String? nick}) {
@@ -174,12 +177,14 @@ class HuaweiAPI {
     required String snsUserId,
     String? accountToken,
     String? refreshToken,
+    String? expireTime,
     String? nick,
   }) {
     if (musicToken.trim().isEmpty || snsUserId.trim().isEmpty) return;
     gateway.session = MusicSession(
       token: musicToken.trim(),
       snsUserId: snsUserId.trim(),
+      expireTime: expireTime?.trim() ?? '',
     );
     if (accountToken != null && accountToken.isNotEmpty) {
       gateway.accountToken = accountToken;
@@ -770,57 +775,241 @@ class HuaweiAPI {
       AudioQuality.lossless: <String>['3', '2', '5'],
       AudioQuality.standard: <String>['1', '2', '3'],
     };
+
+    String? lastCode;
+    String? lastMessage;
+    String lastTier = 'standard/1';
+    var sawPreview = false;
+
     for (final q in wanted) {
-      Map<String, dynamic>? json;
-      Uri? link;
-      String? requestedCode;
       for (final typeCode in typeCodes[q] ?? const <String>['1']) {
-        final result = await gateway.request(
-          HuaweiPaths.playUrl,
-          body: <String, dynamic>{
-            'contentCode': songCode,
-            'contentType': '1',
-            'qualityType': typeCode,
-          },
-        );
-        final candidate = HuaweiGateway.firstUrl(result, const [
+        lastTier = '${q.name}/$typeCode';
+        Map<String, dynamic>? result;
+        String? failedCode;
+        String? failedMessage;
+        try {
+          result = await gateway.request(
+            HuaweiPaths.playUrl,
+            body: <String, dynamic>{
+              'contentCode': songCode,
+              'contentType': '1',
+              'qualityType': typeCode,
+            },
+          );
+        } on HuaweiBusinessException catch (e) {
+          // 401/990000/990006 等鉴权失败交回上层重新登录；142411/142400
+          // 只代表当前档位或当前歌曲受限，继续尝试下一档（尤其是 standard）。
+          if (e.isAuthFailure) {
+            throw _authPlaybackError(e.code, e.detail, path: e.path);
+          }
+          failedCode = e.code;
+          failedMessage = e.detail;
+        } on HuaweiException catch (e) {
+          if (e.statusCode == 401 ||
+              _isAuthFailure(e) ||
+              !_looksLikeTierFailure(e)) {
+            rethrow;
+          }
+          failedCode = _errorCode(e);
+          failedMessage = e.toString();
+        }
+        final json = result;
+        if (json != null) {
+          final businessCode = _playbackBusinessCode(json);
+          if (businessCode != null) {
+            final businessMessage = _playbackBusinessMessage(json);
+            if (HuaweiBusinessException.isAuthBusinessError(
+              businessCode,
+              businessMessage,
+            )) {
+              throw _authPlaybackError(
+                businessCode,
+                businessMessage,
+                path: HuaweiPaths.playUrl,
+              );
+            }
+            failedCode = businessCode;
+            failedMessage = businessMessage;
+          }
+        }
+        if (failedCode != null || json == null) {
+          lastCode = failedCode ?? lastCode;
+          lastMessage = failedMessage ?? lastMessage;
+          AppLog.add(
+            'play',
+            'bycontentcode song=$songCode qualityType=$typeCode '
+            'code=${failedCode ?? 'no-response'} hasUrl=false preview=false '
+            'msg=${(failedMessage ?? '').replaceAll(RegExp(r'\s+'), ' ')}',
+          );
+          continue;
+        }
+        final candidate = HuaweiGateway.firstUrl(json, const [
           'fileURL',
           'fileUrl',
           'playURL',
           'url',
         ]);
-        if (candidate != null &&
-            _safeAudioUrl(candidate) &&
-            !_isAudition(result, candidate)) {
-          json = result;
-          link = candidate;
-          requestedCode = typeCode;
-          break;
-        }
-      }
-      if (json == null || link == null) continue;
-
-      // 以实际请求到的 qualityType 为准：5/7=Hi-Res，3=SQ，1/2=标准。
-      AudioQuality actual = switch (requestedCode) {
-        '7' || '5' => AudioQuality.hiRes,
-        '3' => AudioQuality.lossless,
-        _ => AudioQuality.standard,
-      };
-      if (!out.any((f) => f.quality == actual)) {
-        out.add(
-          HuaweiAudioFile(
-            quality: actual,
-            url: link,
-            sizeBytes:
-                HuaweiGateway.firstInt(json, const ['size', 'fileSize']) ?? 0,
-          ),
+        final preview = candidate != null && _isAudition(json, candidate);
+        if (preview) sawPreview = true;
+        AppLog.add(
+          'play',
+          'bycontentcode song=$songCode qualityType=$typeCode '
+          'code=000000 hasUrl=${candidate != null} preview=$preview '
+          '${_fragmentFlag(json)} '
+          'url=${candidate == null ? '' : _audioUrlSuffix(candidate)}',
         );
+        if (candidate == null || !_safeAudioUrl(candidate) || preview) {
+          lastMessage = candidate == null
+              ? '响应没有 fileURL'
+              : (preview ? '仅返回试听片段' : 'URL 域名不在白名单');
+          continue;
+        }
+
+        // 以实际请求到的 qualityType 为准：5/7=Hi-Res，3=SQ，1/2=标准。
+        final actual = switch (typeCode) {
+          '7' || '5' => AudioQuality.hiRes,
+          '3' => AudioQuality.lossless,
+          _ => AudioQuality.standard,
+        };
+        if (!out.any((f) => f.quality == actual)) {
+          out.add(
+            HuaweiAudioFile(
+              quality: actual,
+              url: candidate,
+              sizeBytes:
+                  HuaweiGateway.firstInt(json, const [
+                    'size',
+                    'fileSize',
+                  ]) ??
+                  0,
+              qualityType: typeCode,
+            ),
+          );
+        }
+        // 当前档位已拿到完整可播文件；继续下一个更低的“音质档”，
+        // 但不再重复请求同档位的其它 typeCode。
+        break;
       }
     }
     if (out.isEmpty) {
-      throw const HuaweiException('该歌曲没有可用的音质档位（请确认已登录且为会员）');
+      final lower = (lastMessage ?? '').toLowerCase();
+      final vipOnly =
+          lastCode == '142411' ||
+          lower.contains('super diamond vip') ||
+          lower.contains('超级钻石');
+      final reason = vipOnly
+          ? '超级钻石 VIP 专享，当前账号无播放权限'
+          : (sawPreview ? '只有试听片段，没有完整音质' : '没有可用的完整音质档位');
+      throw HuaweiException(
+        '华为取流失败（歌曲 $songCode，码 ${lastCode ?? 'unknown'}，'
+        '最终档位 $lastTier）：$reason',
+      );
     }
+    final chosen = out.first;
+    AppLog.add(
+      'play',
+      'bycontentcode song=$songCode choose=${chosen.quality.name} '
+      'qualityType=${chosen.qualityType} size=${chosen.sizeBytes} '
+      'preview=${chosen.preview}',
+    );
     return out;
+  }
+
+  static bool _looksLikeTierFailure(Object e) {
+    final text = e.toString().toLowerCase();
+    return text.contains('142411') ||
+        text.contains('142400') ||
+        text.contains('super diamond') ||
+        text.contains('超级钻石') ||
+        text.contains('vip 专享') ||
+        text.contains('没有可用') ||
+        text.contains('无版权') ||
+        text.contains('不可播放') ||
+        text.contains('华为服务返回');
+  }
+
+  /// 鉴权失败必须变成用户可执行的最终错误，不能被“档位不可用”文案吞掉。
+  static HuaweiBusinessException _authPlaybackError(
+    String code,
+    String detail, {
+    String? path,
+  }) {
+    const hint = '华为鉴权失败，请重新登录华为账号';
+    final text = detail.trim();
+    final hasHint =
+        text.contains('重新登录') ||
+        text.contains('重新扫码') ||
+        text.contains('登录已失效') ||
+        text.contains('登录已过期') ||
+        text.contains('会话已过期');
+    return HuaweiBusinessException(
+      code,
+      text.isEmpty
+          ? hint
+          : (hasHint ? text : '$hint：$text'),
+      path: path,
+    );
+  }
+
+  static String? _playbackBusinessCode(Map<String, dynamic> json) {
+    final result = json['result'];
+    final resultMap = result is Map
+        ? Map<String, dynamic>.from(result)
+        : const <String, dynamic>{};
+    final code =
+        HuaweiGateway.firstString(resultMap, const ['resultCode']) ??
+        HuaweiGateway.firstString(json, const ['resultCode', 'code']);
+    if (code != null && code != HuaweiPaths.successCode) return code;
+    final message = _playbackBusinessMessage(json).toLowerCase();
+    if (message.contains('142411') ||
+        message.contains('only super diamond vip') ||
+        message.contains('super diamond vip') ||
+        message.contains('超级钻石')) {
+      return '142411';
+    }
+    if (message.contains('142400') ||
+        message.contains('没有可用') ||
+        message.contains('无版权')) {
+      return '142400';
+    }
+    return null;
+  }
+
+  static String _playbackBusinessMessage(Map<String, dynamic> json) {
+    final parts = <String>[];
+    void collect(Map<String, dynamic> map) {
+      for (final key in const [
+        'resultMessage',
+        'message',
+        'msg',
+        'errorMessage',
+      ]) {
+        final value = map[key];
+        if (value is String && value.isNotEmpty) parts.add(value);
+      }
+    }
+
+    final result = json['result'];
+    if (result is Map) collect(Map<String, dynamic>.from(result));
+    collect(json);
+    return parts.join(' ');
+  }
+
+  static String _fragmentFlag(Map<String, dynamic> json) {
+    final flag = json['playFragmentFlag'];
+    final fragment = json['fragmentInfo'];
+    final has = fragment is Map ? '${fragment['hasFragement']}' : '';
+    return 'fragmentFlag=${flag ?? '-'} hasFragment=${has.isEmpty ? '-' : has}';
+  }
+
+  static String _audioUrlSuffix(Uri url) {
+    final name = url.path.split('/').last;
+    final lower = name.toLowerCase();
+    final tags = <String>[
+      if (lower.endsWith('_aq.mp3') || lower.endsWith('_aq.flac')) 'AQ',
+      if (lower.endsWith('_pv.mp3') || lower.endsWith('_pv.flac')) 'PV',
+    ];
+    return tags.isEmpty ? name : '$name[${tags.join(',')}]';
   }
 
   bool _safeAudioUrl(Uri u) {
@@ -1628,7 +1817,18 @@ class HuaweiAPI {
 
   static bool _isAuthFailure(Object e) {
     final m = e.toString();
-    return m.contains('990000') || m.contains('鉴权失败') || m.contains('重新登录华为账号');
+    final lower = m.toLowerCase();
+    return m.contains('990000') ||
+        m.contains('990006') ||
+        RegExp(r'\b401\b').hasMatch(m) ||
+        m.contains('鉴权失败') ||
+        m.contains('登录已失效') ||
+        m.contains('登录已过期') ||
+        m.contains('会话已过期') ||
+        m.contains('重新扫码') ||
+        m.contains('重新登录华为账号') ||
+        lower.contains('token expired') ||
+        lower.contains('token has expired');
   }
 
   static String _errorCode(Object e) {
@@ -1708,13 +1908,52 @@ class HuaweiAPI {
       );
     }
 
-    return data.copyWith(
+    final merged = data.copyWith(
       recommended: featured.isNotEmpty ? featured : data.recommended,
       recommendedColumnId: featuredColumnId,
       daily: daily.isNotEmpty ? daily : data.daily,
       listen: fm.isNotEmpty ? fm : data.listen,
+      // 24926 是真实可用的 200 首榜单；热歌速递直接吃这份数据，
+      // 不再使用 pmf001 剩余歌曲切出来的 ≤10 首推断列表。
+      hot: hotChartSongs.isNotEmpty ? hotChartSongs : data.hot,
       playlists: playlists,
       charts: charts,
+    );
+    return _dedupeHomeSections(merged);
+  }
+
+  /// 首页六个歌曲板块必须互不重复。真实独立接口优先，pmf001 推断/切块
+  /// 的 heart/new 最后分配；同一首歌只保留在优先级最高的板块里。
+  static DiscoverData _dedupeHomeSections(DiscoverData data) {
+    final seen = <String>{};
+    String key(Song song) =>
+        song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
+
+    List<Song> clean(Iterable<Song> songs) {
+      final out = <Song>[];
+      for (final song in songs) {
+        if (song.name.isEmpty || song.name == '未知歌曲') continue;
+        if (seen.add(key(song))) out.add(song);
+      }
+      return out;
+    }
+
+    // 每日30首(a001) / 现在就听(privatefm) / 为你推荐(8011) / 热歌(24926)
+    // 都是独立真实接口，先占位；heart/new 是推断数据，最后去重。
+    final daily = clean(data.daily);
+    final listen = clean(data.listen);
+    final recommended = clean(data.recommended);
+    final hot = clean(data.hot);
+    final heart = clean(data.heart);
+    final newSongs = clean(data.newSongs);
+
+    return data.copyWith(
+      daily: daily,
+      listen: listen,
+      recommended: recommended,
+      hot: hot,
+      heart: heart,
+      newSongs: newSongs,
     );
   }
 
@@ -1738,7 +1977,17 @@ class HuaweiAPI {
         '$featuredColumnPath?columnId=$id&start=0&limit=30&hasRecommend=1',
       ),
     );
-    return _songsFromColumnJson(json);
+    final songs = _songsFromColumnJson(json);
+    final rawCount =
+        _findNamedList(json, 'listRcmInfos').length +
+        _findNamedList(json, 'songSimpleInfos').length +
+        _findNamedList(json, 'contentSimpleInfos').length;
+    AppLog.add(
+      'home',
+      'featuredSongs raw=$rawCount parsed=${songs.length} '
+      'empty=${songs.isEmpty}',
+    );
+    return songs;
   }
 
   /// 每日30首：a001 → v3 musiclist/detail/bymusiclistid（GET）。
@@ -2021,6 +2270,21 @@ class HuaweiAPI {
     String key(Song song) =>
         song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
 
+    String textOf(_HomeBatch b) => '${b.id} ${b.label}'.toLowerCase();
+    bool isHeart(_HomeBatch b) =>
+        textOf(b).contains('heart') || textOf(b).contains('心动');
+    bool isNew(_HomeBatch b) =>
+        textOf(b).contains('new') ||
+        textOf(b).contains('新歌') ||
+        textOf(b).contains('newsong');
+    bool isHot(_HomeBatch b) =>
+        textOf(b).contains('hot') || textOf(b).contains('热歌');
+    bool isRecommended(_HomeBatch b) =>
+        textOf(b).contains('recommend') ||
+        textOf(b).contains('推荐') ||
+        textOf(b).contains('exclusive') ||
+        textOf(b).contains('私享');
+
     List<Song> takeSemantic(bool Function(_HomeBatch) test) {
       final out = <Song>[];
       for (final batch in batches) {
@@ -2032,35 +2296,53 @@ class HuaweiAPI {
       return out;
     }
 
-    String textOf(_HomeBatch b) => '${b.id} ${b.label}'.toLowerCase();
-    var heart = takeSemantic(
-      (b) => textOf(b).contains('heart') || textOf(b).contains('心动'),
-    );
-    var newFromEmbedded = takeSemantic(
-      (b) =>
-          textOf(b).contains('new') ||
-          textOf(b).contains('新歌') ||
-          textOf(b).contains('newsong'),
-    );
-    var hot = takeSemantic(
-      (b) => textOf(b).contains('hot') || textOf(b).contains('热歌'),
-    );
+    var heart = takeSemantic(isHeart);
+    var newFromEmbedded = takeSemantic(isNew);
+    var hot = takeSemantic(isHot);
+    final recommendedEmbedded = takeSemantic(isRecommended);
 
-    // 专属端点证据不足时，把 pmf001 内嵌批次按稳定顺序拆成互不重复的
-    // heart / new / hot 三组；这不是跨卡片 fallback。
-    final remaining = embeddedAll
-        .where((song) => !used.contains(key(song)))
-        .toList();
+    // 真实独立接口的歌曲先占位，避免 pmf001 切块与每日/8011 重复。
+    for (final song in <Song>[
+      ...recommended,
+      ...a001Songs,
+      ...sectionSongs,
+    ]) {
+      used.add(key(song));
+    }
+
+    // pmf001 中未被语义标签认领的批次是「现在就听」的独立候选。
+    final remaining = _dedupeSongs(<Song>[
+      for (final batch in batches)
+        if (!isHeart(batch) &&
+            !isNew(batch) &&
+            !isHot(batch) &&
+            !isRecommended(batch))
+          ..._dedupeSongs(batch.songs),
+    ].where((song) => !used.contains(key(song))));
+
+    var listen = <Song>[];
     final emptySlots = <String>[
+      if (listen.isEmpty) 'listen',
+      if (recommended.isEmpty && recommendedEmbedded.isEmpty) 'recommended',
       if (heart.isEmpty) 'heart',
       if (newFromEmbedded.isEmpty) 'new',
       if (hot.isEmpty) 'hot',
     ];
     if (remaining.isNotEmpty && emptySlots.isNotEmpty) {
-      final chunk = (remaining.length / emptySlots.length).ceil();
       for (var i = 0; i < emptySlots.length; i++) {
-        final part = remaining.skip(i * chunk).take(chunk).toList();
+        // 轮询分配而不是整块切分：剩余歌曲少于空槽数时，后面的卡片
+        // 也不会整块为空。
+        final part = <Song>[
+          for (var j = i; j < remaining.length; j += emptySlots.length)
+            remaining[j],
+        ];
         switch (emptySlots[i]) {
+          case 'listen':
+            listen = part;
+            break;
+          case 'recommended':
+            recommended.addAll(part);
+            break;
           case 'heart':
             heart = part;
             break;
@@ -2074,7 +2356,10 @@ class HuaweiAPI {
       }
     }
 
-    final newSongs = sectionSongs.isNotEmpty ? sectionSongs : newFromEmbedded;
+    final newSongs = _dedupeSongs(<Song>[
+      ...sectionSongs,
+      ...newFromEmbedded,
+    ]);
     final seenLists = <String>{};
     playlists.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
     charts.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
@@ -2089,8 +2374,11 @@ class HuaweiAPI {
       charts: charts,
       radio: _dedupeSongs(radio),
       albums: albums,
-      recommended: _dedupeSongs(recommended).take(30).toList(),
-      listen: embeddedAll.take(30).toList(),
+      recommended: _dedupeSongs(<Song>[
+        ...recommended,
+        ...recommendedEmbedded,
+      ]).take(30).toList(),
+      listen: _dedupeSongs(listen).take(30).toList(),
       heart: _dedupeSongs(heart).take(30).toList(),
       hot: _dedupeSongs(hot).take(10).toList(),
       recommendedColumnId: featuredColumnId,

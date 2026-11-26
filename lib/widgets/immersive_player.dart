@@ -32,6 +32,11 @@ class ImmersivePlayer extends StatelessWidget {
     final pal = state.palette;
     final size = MediaQuery.of(context).size;
     final wide = size.width >= 900;
+    final topInset = MediaQuery.paddingOf(context).top;
+    final darkStage = state.showLyrics ||
+        pal.dark ||
+        state.playerStyle == PlayerStyle.modern ||
+        state.playerStyle == PlayerStyle.cover;
 
     // 不在这里监听播放器进度：进度高频变化会让整页每秒重建。
     // 歌词与进度条各自用 Ticker / ValueListenableBuilder 局部刷新。
@@ -43,7 +48,7 @@ class ImmersivePlayer extends StatelessWidget {
           Positioned.fill(
             child: _Backdrop(
               url: song?.cover,
-              dark: state.showLyrics ? true : pal.dark,
+              dark: darkStage,
             ),
           ),
           // 2. 暗色蒙层（保证文字可读）
@@ -52,11 +57,11 @@ class ImmersivePlayer extends StatelessWidget {
               decoration: BoxDecoration(
                 // 歌词模式必须压暗封面背景，否则浅色/高对比封面会把
                 // 白色几何歌词淹没。
-                color: state.showLyrics
-                    ? Colors.black.withValues(alpha: 0.72)
-                    : (pal.dark ? Colors.black : Colors.white).withValues(
-                        alpha: pal.dark ? 0.45 : 0.30,
-                      ),
+                color: darkStage
+                    ? Colors.black.withValues(
+                        alpha: state.showLyrics ? 0.72 : 0.48,
+                      )
+                    : Colors.white.withValues(alpha: 0.30),
               ),
             ),
           ),
@@ -67,28 +72,80 @@ class ImmersivePlayer extends StatelessWidget {
                 Expanded(child: _stage(context, song, pal, size, wide)),
                 if (!state.immersiveFullscreen)
                   _BottomControls(state: state, pal: pal),
-                // 沉浸模式下仍保留一个轻量的退出入口
-                if (state.immersiveFullscreen)
-                  Align(
-                    alignment: Alignment.topRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 8, right: 12),
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.fullscreen_exit,
-                          color: Colors.white70,
-                        ),
-                        onPressed: state.toggleImmersiveFullscreen,
-                        tooltip: '退出全屏沉浸',
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
+          // 沉浸模式只留播放器效果；顶部半透明安全区 + 两个轻量退出入口，
+          // 位置显式叠加 status bar 高度，绝不覆盖系统时间/日期。
+          if (state.immersiveFullscreen)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: topInset + 64,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        Colors.black.withValues(alpha: 0.38),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (state.immersiveFullscreen)
+            Positioned(
+              top: topInset + 8,
+              right: 12,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _immersiveButton(
+                    icon: Icons.keyboard_arrow_down,
+                    tooltip: '退出全屏播放',
+                    onPressed: _closePlayer,
+                  ),
+                  const SizedBox(width: 6),
+                  _immersiveButton(
+                    icon: Icons.fullscreen_exit,
+                    tooltip: '退出全屏沉浸',
+                    onPressed: state.toggleImmersiveFullscreen,
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  Widget _immersiveButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      icon: Icon(icon, size: 20),
+      tooltip: tooltip,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        foregroundColor: Colors.white,
+        backgroundColor: Colors.black.withValues(alpha: 0.38),
+        minimumSize: const Size(38, 38),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+
+  /// 退出播放器时同时退出沉浸，避免下次从播放条进入仍停在无控件全屏。
+  void _closePlayer() {
+    if (state.immersiveFullscreen) state.toggleImmersiveFullscreen();
+    state.closeFullPlayer();
   }
 
   /// 舞台：按播放器样式分派（REA 4 种样式）。
@@ -99,36 +156,13 @@ class ImmersivePlayer extends StatelessWidget {
     Size size,
     bool wide,
   ) {
-    // 从播放条进入时先展示「封面 + 歌词」的播放页；点歌词按钮才进入
-    // 以歌词为主的 sonnet 视图。两种视图都保留封面。
-    if (!state.showLyrics) {
-      return wide
-          ? Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                SizedBox(width: size.width * 0.06),
-                SizedBox(
-                  width: math.min(size.width * 0.34, 420),
-                  child: _CoverSide(
-                    state: state,
-                    song: song,
-                    pal: pal,
-                    spinning: state.audio.playing,
-                  ),
-                ),
-                const SizedBox(width: 48),
-                Expanded(
-                  child: _LyricSide(state: state, pal: pal),
-                ),
-                SizedBox(width: size.width * 0.05),
-              ],
-            )
-          : _NarrowLyrics(state: state, song: song, pal: pal);
-    }
+    // 统一全屏播放器只渲染当前选中的 playerStyle；showLyrics 只控制
+    // 背景明暗/强调，不再切换成另一套歌词皮肤或独立歌词层。
+    late final Widget stage;
     switch (state.playerStyle) {
       case PlayerStyle.modern:
         // 新版：沐语标志性 sonnet 几何艺术字歌词铺满屏幕 + 小尺寸黑胶封面。
-        return Stack(
+        stage = Stack(
           children: [
             SonnetLyrics(state: state, pal: pal),
             if (song != null)
@@ -145,7 +179,7 @@ class ImmersivePlayer extends StatelessWidget {
         );
       case PlayerStyle.cover:
         // 封面沉浸：大图铺底 + 歌词悬浮。
-        return Stack(
+        stage = Stack(
           children: [
             if (song?.cover != null)
               Positioned.fill(child: _Backdrop(url: song!.cover, dark: true)),
@@ -154,7 +188,7 @@ class ImmersivePlayer extends StatelessWidget {
         );
       case PlayerStyle.classic:
         // 经典：左封面右歌词（窄屏上下）。
-        return wide
+        stage = wide
             ? Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -178,13 +212,17 @@ class ImmersivePlayer extends StatelessWidget {
             : _NarrowLyrics(state: state, song: song, pal: pal);
       case PlayerStyle.minimal:
         // 简洁：只有居中歌词，无封面。
-        return Center(
+        stage = Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: _LyricSide(state: state, pal: pal),
           ),
         );
     }
+    return KeyedSubtree(
+      key: ValueKey<String>('immersive-stage-${state.playerStyle.name}'),
+      child: stage,
+    );
   }
 
   Widget _topBar(BuildContext context, Song? song, MuyuPalette pal) {
@@ -194,7 +232,7 @@ class ImmersivePlayer extends StatelessWidget {
         children: [
           IconButton(
             icon: Icon(Icons.keyboard_arrow_down, color: pal.text, size: 30),
-            onPressed: state.closeFullPlayer,
+            onPressed: _closePlayer,
           ),
           Expanded(
             child: Column(

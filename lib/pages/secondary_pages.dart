@@ -127,14 +127,17 @@ class _SearchPageState extends State<SearchPage> {
     }
     return ListView.builder(
       itemCount: state.searchResults.length,
-      itemBuilder: (context, i) => SongRow(
-        song: state.searchResults[i],
-        index: i,
-        onPlay: () =>
-            state.play(state.searchResults[i], queue: state.searchResults),
-        onFavorite: () => state.toggleFavorite(state.searchResults[i]),
-        onArtistTap: () => state.openArtistFromSong(state.searchResults[i]),
-      ),
+      itemBuilder: (context, i) {
+        final song = state.searchResults[i];
+        return SongRow(
+          song: song,
+          index: i,
+          onPlay: () =>
+              playSongFromList(context, state, song, state.searchResults),
+          onFavorite: () => state.toggleFavorite(song),
+          onArtistTap: () => state.openArtistFromSong(song),
+        );
+      },
     );
   }
 
@@ -875,16 +878,52 @@ class PlaylistDetailPage extends StatelessWidget {
           ],
         ),
         body: songs.isEmpty
-            ? const Center(child: Text('歌单暂无歌曲', style: MuyuTheme.muted))
+            ? ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  StatePanel(
+                    message: state.error != null && state.error!.isNotEmpty
+                        ? state.error!
+                        : '歌单暂无歌曲。若这是榜单，请确认榜单 ID 有效并重试。',
+                    onRetry: () => state.openPlaylist(playlist),
+                    actionLabel: '重新加载',
+                  ),
+                ],
+              )
             : ListView.builder(
                 padding: const EdgeInsets.only(bottom: 100),
-                itemCount: songs.length,
-                itemBuilder: (context, i) => SongRow(
-                  song: songs[i],
-                  index: i,
-                  onPlay: () => state.play(songs[i], queue: songs),
-                  onFavorite: () => state.toggleFavorite(songs[i]),
-                ),
+                itemCount: songs.length + 1,
+                itemBuilder: (context, i) {
+                  if (i == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      child: Row(
+                        children: [
+                          Text('${songs.length} 首歌曲', style: MuyuTheme.muted),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: () => playSongFromList(
+                              context,
+                              state,
+                              songs.first,
+                              songs,
+                            ),
+                            icon: const Icon(Icons.play_arrow, size: 18),
+                            label: const Text('播放全部'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  final song = songs[i - 1];
+                  return SongRow(
+                    song: song,
+                    index: i - 1,
+                    onPlay: () => playSongFromList(context, state, song, songs),
+                    onFavorite: () => state.toggleFavorite(song),
+                    onArtistTap: () => state.openArtistFromSong(song),
+                  );
+                },
               ),
       ),
     );
@@ -926,11 +965,14 @@ class ArtistDetailPage extends StatelessWidget {
               ),
             ...List<Widget>.generate(
               songs.length,
-              (i) => SongRow(
-                song: songs[i],
-                index: i,
-                onPlay: () => state.play(songs[i], queue: songs),
-              ),
+              (i) {
+                final song = songs[i];
+                return SongRow(
+                  song: song,
+                  index: i,
+                  onPlay: () => playSongFromList(context, state, song, songs),
+                );
+              },
             ),
           ],
         ),
@@ -1263,11 +1305,15 @@ class _FavoriteListState extends State<_FavoriteList> {
         else
           ...List<Widget>.generate(
             songs.length,
-            (i) => SongRow(
-              song: songs[i],
-              index: i,
-              onPlay: () => widget.state.play(songs[i], queue: songs),
-            ),
+            (i) {
+              final song = songs[i];
+              return SongRow(
+                song: song,
+                index: i,
+                onPlay: () =>
+                    playSongFromList(context, widget.state, song, songs),
+              );
+            },
           ),
       ],
     );
@@ -1377,7 +1423,8 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                               Icons.play_circle_outline,
                               size: 22,
                             ),
-                            onPressed: () => state.play(song, queue: songs),
+                            onPressed: () =>
+                                playSongFromList(context, state, song, songs),
                           ),
                           IconButton(
                             tooltip: '从本地库移除',

@@ -9,6 +9,8 @@ class SessionSnapshot {
     this.huaweiToken = '',
     this.huaweiUserId = '',
     this.huaweiAccountToken = '',
+    this.huaweiRefreshToken = '',
+    this.huaweiExpireTime = '',
     this.huaweiNickname = '',
     this.huaweiAvatar = '',
     this.huaweiMemberLabel = '',
@@ -25,7 +27,16 @@ class SessionSnapshot {
   final String source;
   final String huaweiToken;
   final String huaweiUserId;
+
+  /// OAuth 账号 access token。只用于换音乐会话，绝不能冒充 refresh token。
   final String huaweiAccountToken;
+
+  /// OAuth refresh token（与账号 access token 分开持久化）。
+  final String huaweiRefreshToken;
+
+  /// 音乐会话过期时间，原样保存上游字符串。
+  final String huaweiExpireTime;
+
   final String huaweiNickname;
   final String huaweiAvatar;
   final String huaweiMemberLabel;
@@ -43,6 +54,8 @@ class SessionSnapshot {
         'huaweiToken': huaweiToken,
         'huaweiUserId': huaweiUserId,
         'huaweiAccountToken': huaweiAccountToken,
+        'huaweiRefreshToken': huaweiRefreshToken,
+        'huaweiExpireTime': huaweiExpireTime,
         'huaweiNickname': huaweiNickname,
         'huaweiAvatar': huaweiAvatar,
         'huaweiMemberLabel': huaweiMemberLabel,
@@ -62,6 +75,8 @@ class SessionSnapshot {
       huaweiToken: '${json['huaweiToken'] ?? ''}',
       huaweiUserId: '${json['huaweiUserId'] ?? ''}',
       huaweiAccountToken: '${json['huaweiAccountToken'] ?? ''}',
+      huaweiRefreshToken: '${json['huaweiRefreshToken'] ?? ''}',
+      huaweiExpireTime: '${json['huaweiExpireTime'] ?? ''}',
       huaweiNickname: '${json['huaweiNickname'] ?? ''}',
       huaweiAvatar: '${json['huaweiAvatar'] ?? ''}',
       huaweiMemberLabel: '${json['huaweiMemberLabel'] ?? ''}',

@@ -190,11 +190,11 @@ class _NeteaseHomePageState extends State<NeteaseHomePage> {
             icon: Icons.calendar_today_outlined,
             label: '每日推荐',
             color: neteaseRed,
-            onTap: () => s.play(
-              data.dailySongs.isNotEmpty
-                  ? data.dailySongs.first
-                  : Song(id: '', name: ''),
-              queue: data.dailySongs,
+            onTap: () => playSongFromList(
+              context,
+              s,
+              data.dailySongs.first,
+              data.dailySongs,
             ),
             enabled: data.dailySongs.isNotEmpty,
           ),
@@ -202,11 +202,11 @@ class _NeteaseHomePageState extends State<NeteaseHomePage> {
             icon: Icons.radio,
             label: '私人 FM',
             color: const Color(0xFFF59E0B),
-            onTap: () => s.play(
-              data.radioSongs.isNotEmpty
-                  ? data.radioSongs.first
-                  : Song(id: '', name: ''),
-              queue: data.radioSongs,
+            onTap: () => playSongFromList(
+              context,
+              s,
+              data.radioSongs.first,
+              data.radioSongs,
             ),
             enabled: data.radioSongs.isNotEmpty,
           ),
@@ -214,11 +214,11 @@ class _NeteaseHomePageState extends State<NeteaseHomePage> {
             icon: Icons.auto_awesome,
             label: '推荐新歌',
             color: const Color(0xFF8B5CF6),
-            onTap: () => s.play(
-              data.newSongs.isNotEmpty
-                  ? data.newSongs.first
-                  : Song(id: '', name: ''),
-              queue: data.newSongs,
+            onTap: () => playSongFromList(
+              context,
+              s,
+              data.newSongs.first,
+              data.newSongs,
             ),
             enabled: data.newSongs.isNotEmpty,
           ),
@@ -328,7 +328,7 @@ class _NeteaseHomePageState extends State<NeteaseHomePage> {
     return SongRow(
       song: song,
       index: index,
-      onPlay: song.id.isEmpty ? () {} : () => s.play(song, queue: queue),
+      onPlay: () => playSongFromList(context, s, song, queue),
       onFavorite: song.id.isEmpty ? null : () => s.toggleFavorite(song),
       onArtistTap: song.id.isEmpty ? null : () => s.openArtistFromSong(song),
     );

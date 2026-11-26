@@ -315,4 +315,145 @@ void main() {
     expect(tapped, 1);
     state.dispose();
   });
+
+  testWidgets('首页 5 张卡 + 为你推荐使用各自独立队列，换组不触发请求', (tester) async {
+    final state = _RecordingState();
+    state.api.gateway.session = MusicSession(
+      token: 'ui-test-token',
+      snsUserId: 'ui-test-user',
+    );
+    Song song(String id) =>
+        Song(id: id, name: '曲-$id', artists: const <String>['真实歌手']);
+    final recommended = <Song>[song('rec-1'), song('rec-2')];
+    final listen = <Song>[song('listen-1')];
+    final daily = <Song>[song('daily-1')];
+    final heart = <Song>[song('heart-1')];
+    final newSongs = <Song>[song('new-1')];
+    final hot = <Song>[song('hot-1')];
+    state.discover = DiscoverData(
+      recommended: recommended,
+      listen: listen,
+      daily: daily,
+      heart: heart,
+      newSongs: newSongs,
+      hot: hot,
+    );
+
+    await tester.binding.setSurfaceSize(const Size(1460, 1400));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    for (var i = 0; i < 5; i++) {
+      await tester.tap(find.byType(HomeCard).at(i));
+      await tester.pump();
+    }
+    expect(state.playedIds, <String>[
+      'listen-1',
+      'daily-1',
+      'heart-1',
+      'new-1',
+      'hot-1',
+    ]);
+    expect(state.queues[0].map((s) => s.id), <String>['listen-1']);
+    expect(state.queues[1].map((s) => s.id), <String>['daily-1']);
+    expect(state.queues[2].map((s) => s.id), <String>['heart-1']);
+    expect(state.queues[3].map((s) => s.id), <String>['new-1']);
+    expect(state.queues[4].map((s) => s.id), <String>['hot-1']);
+
+    state.playedIds.clear();
+    state.queues.clear();
+    await tester.tap(find.text('曲-rec-1'));
+    await tester.pump();
+    expect(state.playedIds, <String>['rec-1']);
+    expect(state.queues.single.map((s) => s.id), <String>['rec-1', 'rec-2']);
+
+    final before = state.refreshHomeCalls;
+    await tester.tap(find.text('下一组'));
+    await tester.pump();
+    expect(state.refreshHomeCalls, before);
+    state.dispose();
+  });
+
+  testWidgets('搜索结果行调用 state.play，并传入完整当前结果队列', (tester) async {
+    final state = _RecordingState();
+    state.searchResults = <Song>[
+      Song(id: 'search-1', name: '搜索结果一', artists: const <String>['A']),
+      Song(id: 'search-2', name: '搜索结果二', artists: const <String>['B']),
+    ];
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: SearchPage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('搜索结果一'));
+    await tester.pump();
+    expect(state.playedIds, <String>['search-1']);
+    expect(
+      state.queues.single.map((s) => s.id),
+      <String>['search-1', 'search-2'],
+    );
+    state.dispose();
+  });
+
+  testWidgets('榜单详情歌曲行可播放，播放全部使用榜单歌曲队列', (tester) async {
+    final state = _RecordingState();
+    state.activePlaylist = const Playlist(
+      id: '24926',
+      name: '热歌榜',
+      kind: 'chart',
+    );
+    state.playlistSongsList = <Song>[
+      Song(id: 'chart-1', name: '榜单歌1', artists: const <String>['A']),
+      Song(id: 'chart-2', name: '榜单歌2', artists: const <String>['B']),
+    ];
+    await tester.binding.setSurfaceSize(const Size(900, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: PlaylistDetailPage(state: state),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('榜单歌1'));
+    await tester.pump();
+    expect(state.playedIds, <String>['chart-1']);
+    expect(state.queues.single.map((s) => s.id), <String>['chart-1', 'chart-2']);
+
+    state.playedIds.clear();
+    state.queues.clear();
+    await tester.tap(find.text('播放全部'));
+    await tester.pump();
+    expect(state.playedIds, <String>['chart-1']);
+    expect(state.queues.single.map((s) => s.id), <String>['chart-1', 'chart-2']);
+    state.dispose();
+  });
+}
+
+class _RecordingState extends AppState {
+  final List<String> playedIds = <String>[];
+  final List<List<Song>> queues = <List<Song>>[];
+  int refreshHomeCalls = 0;
+
+  @override
+  Future<void> play(Song song, {List<Song>? queue}) async {
+    playedIds.add(song.id);
+    queues.add(List<Song>.of(queue ?? <Song>[song]));
+    refresh();
+  }
+
+  @override
+  Future<void> refreshHome({bool force = true}) async {
+    refreshHomeCalls++;
+    refresh();
+  }
 }

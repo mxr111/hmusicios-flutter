@@ -45,8 +45,8 @@ class DiscoverPage extends StatelessWidget {
         const SizedBox(height: 12),
         if (data.playlists.isEmpty)
           _empty('华为接口未返回推荐歌单', pal)
-        else
-          _playlistRow(data.playlists, pal),
+          else
+          _playlistRow(context, data.playlists, pal),
         const SizedBox(height: 26),
         _sectionTitle(
           '华为音乐榜单',
@@ -57,7 +57,7 @@ class DiscoverPage extends StatelessWidget {
         if (data.charts.isEmpty)
           _empty('华为接口未返回榜单', pal)
         else
-          _chartGrid(data.charts, pal, wide),
+          _chartGrid(context, data.charts, pal, wide),
       ],
     );
   }
@@ -99,7 +99,11 @@ class DiscoverPage extends StatelessWidget {
     );
   }
 
-  Widget _playlistRow(List<Playlist> lists, MuyuPalette pal) {
+  Widget _playlistRow(
+    BuildContext context,
+    List<Playlist> lists,
+    MuyuPalette pal,
+  ) {
     return SizedBox(
       height: 172,
       child: ListView.separated(
@@ -111,7 +115,7 @@ class DiscoverPage extends StatelessWidget {
           return SizedBox(
             width: 132,
             child: InkWell(
-              onTap: () => state.openPlaylist(p),
+              onTap: () => _openPlaylist(context, p),
               borderRadius: BorderRadius.circular(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -140,7 +144,12 @@ class DiscoverPage extends StatelessWidget {
     );
   }
 
-  Widget _chartGrid(List<Playlist> charts, MuyuPalette pal, bool wide) {
+  Widget _chartGrid(
+    BuildContext context,
+    List<Playlist> charts,
+    MuyuPalette pal,
+    bool wide,
+  ) {
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -154,7 +163,7 @@ class DiscoverPage extends StatelessWidget {
       itemBuilder: (context, i) {
         final chart = charts[i];
         return InkWell(
-          onTap: () => state.openPlaylist(chart),
+          onTap: () => _openChart(context, chart),
           borderRadius: BorderRadius.circular(14),
           child: Container(
             decoration: BoxDecoration(
@@ -202,6 +211,36 @@ class DiscoverPage extends StatelessWidget {
         );
       },
     );
+  }
+
+  Future<void> _openPlaylist(BuildContext context, Playlist playlist) async {
+    await state.openPlaylist(playlist);
+    if (!context.mounted) return;
+    if (state.playlistSongsList.isEmpty) {
+      _showMessage(context, '歌单「${playlist.name}」未返回歌曲，请稍后重试');
+    }
+  }
+
+  /// 榜单必须走 chart 取歌路径，避免把榜单 ID 当普通歌单请求导致“能打开但无歌”。
+  Future<void> _openChart(BuildContext context, Playlist chart) async {
+    final normalized = Playlist(
+      id: chart.id,
+      name: chart.name,
+      cover: chart.cover,
+      songCount: chart.songCount,
+      kind: 'chart',
+    );
+    await state.openPlaylist(normalized);
+    if (!context.mounted) return;
+    if (state.playlistSongsList.isEmpty) {
+      _showMessage(context, '榜单「${chart.name}」未返回歌曲，请稍后重试');
+    }
+  }
+
+  void _showMessage(BuildContext context, String message) {
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _empty(String message, MuyuPalette pal) {

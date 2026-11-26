@@ -36,7 +36,7 @@ class PlayerBar extends StatelessWidget {
     return GestureDetector(
       // 原版交互：点播放条空白/封面/歌名进入全屏播放页；
       // 歌词按钮也进入同一页，而不是只切换一个独立歌词层。
-      onTap: hasTrack ? () => state.openFullPlayer(song) : _startFirst,
+      onTap: hasTrack ? () => _openFullPlayer(song) : _startFirst,
       child: Container(
         height: MuyuDims.playerBarHeight,
         decoration: BoxDecoration(
@@ -53,6 +53,7 @@ class PlayerBar extends StatelessWidget {
         child: LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth > 820;
+          final compact = constraints.maxWidth < 520;
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
@@ -60,7 +61,7 @@ class PlayerBar extends StatelessWidget {
                 VinylCover(url: song.cover, size: 46, spinning: audio.playing),
                 const SizedBox(width: 10),
                 SizedBox(
-                  width: wide ? 150 : 110,
+                  width: compact ? 100 : (wide ? 150 : 110),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -75,14 +76,19 @@ class PlayerBar extends StatelessWidget {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          Text(song.artistText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 12, color: pal.muted)),
-                          const SizedBox(width: 6),
-                          const SourceBadge(compact: true),
-                          const SizedBox(width: 5),
-                          QualityBadge(audio.quality, small: true),
+                          Expanded(
+                            child: Text(song.artistText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style:
+                                    TextStyle(fontSize: 12, color: pal.muted)),
+                          ),
+                          if (!compact) ...[
+                            const SizedBox(width: 6),
+                            const SourceBadge(compact: true),
+                            const SizedBox(width: 5),
+                            QualityBadge(audio.quality, small: true),
+                          ],
                         ],
                       ),
                     ],
@@ -93,39 +99,42 @@ class PlayerBar extends StatelessWidget {
                   _controls(audio),
                 ],
                 const SizedBox(width: 8),
-                Expanded(
-                  child: ValueListenableBuilder<Duration>(
-                    valueListenable: audio.positionNotifier,
-                    builder: (context, value, _) {
-                      final seconds = hasTrack
-                          ? value.inSeconds.toDouble().clamp(0.0, total)
-                          : currentSeconds;
-                      return Row(
-                        children: [
-                          Text(_fmt(seconds),
-                              style: TextStyle(fontSize: 12, color: pal.muted)),
-                          Expanded(
-                            child: Slider(
-                              value: seconds,
-                              min: 0,
-                              max: total,
-                              activeColor: MuyuColors.primary,
-                              inactiveColor: MuyuColors.divider,
-                              onChanged: (v) =>
-                                  audio.seek(Duration(seconds: v.toInt())),
+                if (!compact)
+                  Expanded(
+                    child: ValueListenableBuilder<Duration>(
+                      valueListenable: audio.positionNotifier,
+                      builder: (context, value, _) {
+                        final seconds = hasTrack
+                            ? value.inSeconds.toDouble().clamp(0.0, total)
+                            : currentSeconds;
+                        return Row(
+                          children: [
+                            Text(_fmt(seconds),
+                                style: TextStyle(
+                                    fontSize: 12, color: pal.muted)),
+                            Expanded(
+                              child: Slider(
+                                value: seconds,
+                                min: 0,
+                                max: total,
+                                activeColor: MuyuColors.primary,
+                                inactiveColor: MuyuColors.divider,
+                                onChanged: (v) =>
+                                    audio.seek(Duration(seconds: v.toInt())),
+                              ),
                             ),
-                          ),
-                          Text(
-                            hasTrack && audio.duration.inSeconds > 0
-                                ? _fmt(total)
-                                : '0:00',
-                            style: TextStyle(fontSize: 12, color: pal.muted),
-                          ),
-                        ],
-                      );
-                    },
+                            Text(
+                              hasTrack && audio.duration.inSeconds > 0
+                                  ? _fmt(total)
+                                  : '0:00',
+                              style: TextStyle(fontSize: 12, color: pal.muted),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
                   ),
-                ),
+                if (compact) const Spacer(),
                 if (wide) ..._rightButtons(context, song),
                 if (!wide) ...[
                   TinyIconButton(
@@ -192,6 +201,19 @@ class PlayerBar extends StatelessWidget {
     }
   }
 
+  /// 播放条空白/封面：进入应用级全屏播放器，保留当前 playerStyle。
+  void _openFullPlayer(Song song) {
+    if (state.immersiveFullscreen) state.toggleImmersiveFullscreen();
+    state.openFullPlayer(song);
+  }
+
+  /// 歌词按钮 = 歌词放大：同一播放器全屏沉浸，只保留当前样式与歌词，
+  /// 不换皮肤、不加载另一个独立歌词页。
+  void _openLyrics(Song song) {
+    state.showLyricsFor(song);
+    if (!state.immersiveFullscreen) state.toggleImmersiveFullscreen();
+  }
+
   void _togglePlayback() {
     if (state.audio.current == null) {
       _startFirst();
@@ -228,7 +250,7 @@ class PlayerBar extends StatelessWidget {
       ),
       TinyIconButton(
         icon: Icons.lyrics_outlined,
-        onTap: () => state.showLyricsFor(song),
+        onTap: () => _openLyrics(song),
         tooltip: '歌词',
       ),
       TinyIconButton(

@@ -78,10 +78,18 @@ class HuaweiAudioFile {
     required this.quality,
     required this.url,
     required this.sizeBytes,
+    this.qualityType = '',
+    this.preview = false,
   });
   final AudioQuality quality;
   final Uri url;
   final int sizeBytes;
+
+  /// 上游实际请求/返回的 qualityType（1/2/3/5/7），用于日志与排障。
+  final String qualityType;
+
+  /// 是否为 30/60 秒试听片段；正常播放路径只会接受 false。
+  final bool preview;
 }
 
 class Song {

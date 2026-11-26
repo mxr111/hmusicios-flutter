@@ -48,7 +48,7 @@ class _HomePageState extends State<HomePage> {
       children: [
         _header(context, state),
         const SizedBox(height: 16),
-        _heroCards(cards),
+        _heroCards(context, cards),
         _cardGroupBar(),
         const SizedBox(height: 24),
         Padding(
@@ -94,7 +94,12 @@ class _HomePageState extends State<HomePage> {
                     song: song,
                     index: songs.indexOf(song),
                     showTags: false,
-                    onPlay: () => state.play(song, queue: songs),
+                    onPlay: () => playSongFromList(
+                      context,
+                      state,
+                      song,
+                      songs,
+                    ),
                     onFavorite: () => state.toggleFavorite(song),
                     onArtistTap: () => state.openArtistFromSong(song),
                   ),
@@ -114,7 +119,7 @@ class _HomePageState extends State<HomePage> {
                   actionLabel: '重试',
                 )
               else
-                _playlistStrip(playlists),
+                _playlistStrip(context, playlists),
               const SizedBox(height: 26),
               _sectionRow(
                 title: '热歌榜',
@@ -136,7 +141,7 @@ class _HomePageState extends State<HomePage> {
                   actionLabel: '重试',
                 )
               else
-                _hotChartPanel(charts[chartPage - 1]),
+                _hotChartPanel(context, charts[chartPage - 1]),
             ],
           ),
         ),
@@ -223,7 +228,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _heroCards(List<HomeCardSpec> cards) {
+  Widget _heroCards(BuildContext context, List<HomeCardSpec> cards) {
     return SizedBox(
       height: MuyuDims.cardHeight,
       child: ListView.separated(
@@ -233,7 +238,7 @@ class _HomePageState extends State<HomePage> {
         separatorBuilder: (_, _) => const SizedBox(width: 16),
         itemBuilder: (context, i) => HomeCard(
           spec: cards[i],
-          onPlay: () => _playCard(widget.state, cards[i].action),
+          onPlay: () => _playCard(context, cards[i].action),
         ),
       ),
     );
@@ -246,22 +251,34 @@ class _HomePageState extends State<HomePage> {
       child: Row(
         children: [
           Text('上一组 / 下一组', style: TextStyle(fontSize: 12, color: pal.muted)),
+          if (widget.state.loading)
+            const Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(strokeWidth: 1.6),
+              ),
+            ),
           const Spacer(),
           TextButton(
-            onPressed: () => setState(() {
-              _cardGroup = _cardGroup == 0 ? 4 : _cardGroup - 1;
-            }),
+            onPressed: () => _changeGroup(-1),
             child: const Text('上一组'),
           ),
           TextButton(
-            onPressed: () => setState(() {
-              _cardGroup = (_cardGroup + 1) % 5;
-            }),
+            onPressed: () => _changeGroup(1),
             child: const Text('下一组'),
           ),
         ],
       ),
     );
+  }
+
+  /// 换组只切换已有本地分组；禁止在这里 force 刷新，避免请求风暴。
+  void _changeGroup(int delta) {
+    setState(() {
+      _cardGroup = (_cardGroup + delta) % 5;
+    });
   }
 
   Widget _sectionRow({
@@ -296,7 +313,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _playlistStrip(List<Playlist> playlists) {
+  Widget _playlistStrip(BuildContext context, List<Playlist> playlists) {
     return SizedBox(
       height: 190,
       child: ListView.separated(
@@ -308,7 +325,7 @@ class _HomePageState extends State<HomePage> {
           return SizedBox(
             width: 132,
             child: InkWell(
-              onTap: () => widget.state.openPlaylist(playlist),
+              onTap: () => _openPlaylist(context, playlist),
               borderRadius: BorderRadius.circular(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -336,10 +353,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _hotChartPanel(Playlist chart) {
+  Widget _hotChartPanel(BuildContext context, Playlist chart) {
     final pal = widget.state.palette;
     return InkWell(
-      onTap: () => widget.state.openPlaylist(chart),
+      onTap: () => _openChart(context, chart),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(12),
@@ -378,6 +395,36 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
+  }
+
+  Future<void> _openPlaylist(BuildContext context, Playlist playlist) async {
+    await widget.state.openPlaylist(playlist);
+    if (!context.mounted) return;
+    if (widget.state.playlistSongsList.isEmpty) {
+      _showMessage(context, '歌单「${playlist.name}」未返回歌曲，请重新登录或稍后重试');
+    }
+  }
+
+  /// 首页热歌榜必须按 chart 路径加载；不把榜单当普通收藏歌单请求。
+  Future<void> _openChart(BuildContext context, Playlist chart) async {
+    final normalized = Playlist(
+      id: chart.id,
+      name: chart.name,
+      cover: chart.cover,
+      songCount: chart.songCount,
+      kind: 'chart',
+    );
+    await widget.state.openPlaylist(normalized);
+    if (!context.mounted) return;
+    if (widget.state.playlistSongsList.isEmpty) {
+      _showMessage(context, '榜单「${chart.name}」未返回歌曲，请稍后重试');
+    }
+  }
+
+  void _showMessage(BuildContext context, String message) {
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 五张卡分别绑定首页真实栏目：
@@ -483,7 +530,8 @@ class _HomePageState extends State<HomePage> {
     return null;
   }
 
-  Future<void> _playCard(AppState state, String action) async {
+  Future<void> _playCard(BuildContext context, String action) async {
+    final state = widget.state;
     List<Song> list;
     switch (action) {
       case 'radio':
@@ -505,34 +553,27 @@ class _HomePageState extends State<HomePage> {
         return;
     }
     if (list.isEmpty) {
-      // 只重试本板块；绝不借用其他卡片或 homeSongs。
-      await state.refreshHome(force: true);
-      list = switch (action) {
-        'radio' => state.discover.listen,
-        'daily' => state.discover.daily,
-        'hot' => state.discover.hot,
-        'heart' => state.discover.heart,
-        _ => state.discover.newSongs,
-      };
-    }
-    if (list.isEmpty) {
-      if (action == 'daily') {
-        final daily = _firstWhereOrNull(
-          state.discover.playlists,
-          (Playlist playlist) => playlist.id == 'a001',
-        );
-        if (daily != null) {
-          await state.openPlaylist(daily);
-          return;
-        }
-      }
-      state.error = '「$action」独立板块未返回歌曲（不回填其他列表）';
+      // 空卡片只提示，不自动 force 刷新；只有用户点「刷新/重试」才重载。
+      final label = _cardLabel(action);
+      state.error = '「$label」独立板块未返回歌曲（不回填其他列表）';
       state.refresh();
+      if (!context.mounted) return;
+      _showMessage(context, state.error!);
       return;
     }
     final index = _cardGroup % list.length;
-    await state.play(list[index], queue: list);
+    if (!context.mounted) return;
+    await playSongFromList(context, state, list[index], list);
   }
+
+  static String _cardLabel(String action) => switch (action) {
+    'radio' => '现在就听',
+    'daily' => '每日30首',
+    'heart' => '心动模式',
+    'new' => '新歌推荐',
+    'hot' => '热歌速递',
+    _ => action,
+  };
 }
 
 /// 顶部音源切换：华为 / 网易云 / 酷狗 / QQ 四个真实音源。

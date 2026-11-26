@@ -88,19 +88,29 @@ class AppShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 播放器是应用级全屏层：进入后不再保留侧栏、底部标签栏/播放条和
+    // 任何页面头部，退出时只恢复状态标记，不重建/打断当前播放。
+    if (state.showPlayer || state.showLyrics) {
+      return LyricsPage(state: state);
+    }
     final wide = MediaQuery.of(context).size.width >= 760;
     return Scaffold(
-      body: Row(
-        children: [
-          if (wide)
-            Sidebar(
-              state: state,
-              onSettings: () => _openSettings(context),
-              onLocalMusic: () => _openLocalMusic(context),
-              onAccount: () => _login(context),
-            ),
-          Expanded(child: _content(context)),
-        ],
+      // 根布局必须避开系统状态栏；否则宽屏侧栏账号头和主页标题会压住
+      // iOS/Android 左上角的日期时间。底部交给 BottomNavigationBar。
+      body: SafeArea(
+        bottom: false,
+        child: Row(
+          children: [
+            if (wide)
+              Sidebar(
+                state: state,
+                onSettings: () => _openSettings(context),
+                onLocalMusic: () => _openLocalMusic(context),
+                onAccount: () => _login(context),
+              ),
+            Expanded(child: _content(context)),
+          ],
+        ),
       ),
       bottomNavigationBar: wide
           ? null
@@ -143,8 +153,6 @@ class AppShell extends StatelessWidget {
           bottom: 14,
           child: PlayerBar(state: state),
         ),
-        if (state.showPlayer || state.showLyrics)
-          Positioned.fill(child: LyricsPage(state: state)),
         if (state.activePlaylist != null)
           Positioned.fill(child: PlaylistDetailPage(state: state)),
         if (state.activeArtist != null)

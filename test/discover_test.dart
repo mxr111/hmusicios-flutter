@@ -95,6 +95,105 @@ class _FakeGateway extends HuaweiGateway {
   }
 }
 
+class _HomeDegradeGateway extends HuaweiGateway {
+  _HomeDegradeGateway({
+    this.chartCount = 200,
+    this.emptyFeatured = true,
+    this.fmFails = true,
+    this.playlistFails = true,
+  });
+
+  final int chartCount;
+  final bool emptyFeatured;
+  final bool fmFails;
+  final bool playlistFails;
+
+  Map<String, dynamic> get _homeJson => <String, dynamic>{
+        'result': <String, dynamic>{
+          'columnInfoExs': <dynamic>[
+            <String, dynamic>{
+              'columnInfo': <String, dynamic>{'columnID': 'home'},
+              'contentSimpleInfos': <dynamic>[
+                <String, dynamic>{
+                  'contentID': 'pmf001',
+                  'contentType': '12',
+                  'contentName': '现在就听',
+                  'listRcmInfos': <dynamic>[
+                    for (var i = 0; i < 6; i++)
+                      _song('pmf-$i', 'PMF 歌曲 $i'),
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      };
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    if (path.startsWith(
+      '/music-operation-service/v1/service/page/detail/all',
+    )) {
+      return _homeJson;
+    }
+    if (path.startsWith(HuaweiAPI.featuredColumnPath)) {
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'listRcmInfos': emptyFeatured ? <dynamic>[] : <dynamic>[
+            _song('rec-1', '为你推荐一'),
+          ],
+        },
+      };
+    }
+    if (path.startsWith(HuaweiAPI.dailyPlaylistPath)) {
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'songSimpleInfos': <dynamic>[
+            _song('daily-1', '每日一'),
+          ],
+        },
+      };
+    }
+    if (path.contains('/chart/detail/bychartid')) {
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'songSimpleInfos': <dynamic>[
+            for (var i = 0; i < chartCount; i++)
+              _song('chart-$i', '热歌 $i'),
+          ],
+        },
+      };
+    }
+    throw StateError('unexpected get $path');
+  }
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String path, {
+    Map<String, dynamic> body = const <String, dynamic>{},
+  }) async {
+    if (path.endsWith('/recommend/privatefm')) {
+      if (fmFails) throw const HuaweiException('HTTP 400');
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'listRcmInfos': <dynamic>[_song('fm-1', '电台一')],
+        },
+      };
+    }
+    if (path.endsWith('/recommend/playlist')) {
+      if (playlistFails) throw const HuaweiException('HTTP 400');
+      return <String, dynamic>{
+        'result': <String, dynamic>{
+          'playListInfos': <dynamic>[
+            <String, dynamic>{'playListID': 'pl-1', 'playListName': '歌单一'},
+          ],
+        },
+      };
+    }
+    throw StateError('unexpected post $path');
+  }
+}
+
 Map<String, dynamic> _song(String id, String name) => <String, dynamic>{
   'contentID': id,
   'contentName': name,
@@ -170,16 +269,16 @@ void main() {
     });
 
     expect(d.features.any((f) => f.id == 'pmf001'), isTrue);
-    expect(
-      d.listen.map((s) => s.id),
-      containsAll(<String>['heart-batch-0', 'new-batch-0', 'hot-batch-0']),
-    );
     expect(d.heart.map((s) => s.id), containsAll(<String>['heart-batch-0']));
     expect(d.newSongs.map((s) => s.id), containsAll(<String>['new-batch-0']));
     expect(d.hot.map((s) => s.id), containsAll(<String>['hot-batch-0']));
+    final listenIds = d.listen.map((s) => s.id).toSet();
     final heartIds = d.heart.map((s) => s.id).toSet();
     final newIds = d.newSongs.map((s) => s.id).toSet();
     final hotIds = d.hot.map((s) => s.id).toSet();
+    expect(listenIds.intersection(heartIds), isEmpty);
+    expect(listenIds.intersection(newIds), isEmpty);
+    expect(listenIds.intersection(hotIds), isEmpty);
     expect(heartIds.intersection(newIds), isEmpty);
     expect(heartIds.intersection(hotIds), isEmpty);
     expect(newIds.intersection(hotIds), isEmpty);
@@ -385,6 +484,81 @@ void main() {
     expect(d.hot, isEmpty);
     expect(d.daily, isEmpty);
     expect(d.features, isEmpty);
+  });
+
+  test('24926 的 200 首真实榜单赋给 hot，六个板块互不重复', () async {
+    final api = HuaweiAPI(gateway: _HomeDegradeGateway());
+    final d = await api.discover();
+
+    expect(d.hot.length, 200);
+    expect(d.hot.first.id, 'chart-0');
+    final hotChart = d.charts.firstWhere((p) => p.id == '24926');
+    expect(hotChart.songCount, 200);
+
+    expect(d.daily.map((s) => s.id), contains('daily-1'));
+    expect(d.listen, isNotEmpty);
+    expect(d.recommended, isNotEmpty);
+    expect(d.heart, isNotEmpty);
+    expect(d.newSongs, isNotEmpty);
+
+    final groups = <List<Song>>[
+      d.listen,
+      d.daily,
+      d.heart,
+      d.newSongs,
+      d.hot,
+      d.recommended,
+    ];
+    final ids = <String>[
+      for (final group in groups)
+        for (final song in group) song.id,
+    ];
+    expect(ids.toSet().length, ids.length, reason: '首页板块不能重复同一首歌');
+    for (final fake in const <String>['998', 'a003', 'a004', 'a006']) {
+      expect(ids, isNot(contains(fake)));
+    }
+  });
+
+  test('8011 空 / privatefm 400 / recommend playlist 400 时用 pmf001 独立批次降级', () async {
+    final api = HuaweiAPI(gateway: _HomeDegradeGateway(chartCount: 1));
+    final d = await api.discover();
+
+    expect(d.recommended, isNotEmpty);
+    expect(d.listen, isNotEmpty);
+    expect(d.heart, isNotEmpty);
+    expect(d.newSongs, isNotEmpty);
+    expect(d.hot.single.id, 'chart-0');
+    expect(d.playlists.any((p) => p.id == 'a001'), isTrue);
+
+    final ids = <String>[
+      for (final group in <List<Song>>[
+        d.listen,
+        d.daily,
+        d.heart,
+        d.newSongs,
+        d.hot,
+        d.recommended,
+      ])
+        for (final song in group) song.id,
+    ];
+    expect(ids.toSet().length, ids.length);
+  });
+
+  test('8011 / privatefm / recommend playlist 正常时优先真实独立接口', () async {
+    final api = HuaweiAPI(
+      gateway: _HomeDegradeGateway(
+        chartCount: 3,
+        emptyFeatured: false,
+        fmFails: false,
+        playlistFails: false,
+      ),
+    );
+    final d = await api.discover();
+
+    expect(d.recommended.first.id, 'rec-1');
+    expect(d.listen.single.id, 'fm-1');
+    expect(d.playlists.any((p) => p.id == 'pl-1'), isTrue);
+    expect(d.hot.length, 3);
   });
 
   upstreamQualityTests();

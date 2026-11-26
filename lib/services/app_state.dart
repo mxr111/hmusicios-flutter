@@ -16,13 +16,28 @@ import 'session_store.dart';
 
 /// 全局状态：零第三方状态管理，直接用 ChangeNotifier + AnimatedBuilder。
 class AppState extends ChangeNotifier {
-  AppState({SessionStore? sessionStore, HuaweiAPI? huaweiApi})
+  AppState({
+    SessionStore? sessionStore,
+    HuaweiAPI? huaweiApi,
+    MuyuAudioController? audioController,
+  })
     : _sessionStore = sessionStore ?? PreferencesSessionStore(),
       api = huaweiApi ?? HuaweiAPI() {
+    audio =
+        audioController ??
+        MuyuAudioController(
+          api,
+          netease: netease,
+          kugou: kugou,
+          qq: qq,
+        );
     audio.addListener(notifyListeners);
     local.addListener(notifyListeners);
     // 授权码换到的账号 token / 音乐 token 变化时立刻持久化。
-    api.gateway.onSessionChanged = () => persistSession();
+    api.gateway.onSessionChanged = () {
+      _authChangedAt = DateTime.now();
+      persistSession();
+    };
     api.onProfileChanged = () {
       persistSession();
       notifyListeners();
@@ -68,12 +83,7 @@ class AppState extends ChangeNotifier {
             (api.isMember ? '华为音乐会员' : (api.isLoggedIn ? '华为音乐' : '')))
       : '';
 
-  late final MuyuAudioController audio = MuyuAudioController(
-    api,
-    netease: netease,
-    kugou: kugou,
-    qq: qq,
-  );
+  late final MuyuAudioController audio;
 
   int tab = 0;
   bool loading = false;
@@ -93,6 +103,16 @@ class AppState extends ChangeNotifier {
   int _homeRefreshSeed = 0;
   Future<void>? _homeInFlight;
   DateTime? _homeRetryBlockedUntil;
+  DateTime? _lastForcedRefreshAt;
+  DateTime? _authChangedAt;
+  int _suppressedHomeRefreshes = 0;
+
+  /// 最小强制刷新间隔：空卡片/短时间重复 force 不再排 N 轮全量请求。
+  static const Duration _minHomeRefreshGap = Duration(seconds: 5);
+  static const Duration _authRefreshWindow = Duration(minutes: 2);
+
+  /// 测试/日志可见：被防风暴保护抑制的 force 次数。
+  int get suppressedHomeRefreshes => _suppressedHomeRefreshes;
 
   /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
   PlayerStyle playerStyle = PlayerStyle.modern;
@@ -195,17 +215,46 @@ class AppState extends ChangeNotifier {
       await loadQqHome();
       return;
     }
+
+    final now = DateTime.now();
+    var authFresh = false;
     if (force) {
+      // 登录成功后的第一次刷新必须真正生效；普通空卡片/短时间重复
+      // force 则合并到正在进行的加载或直接抑制。
+      final changedAt = _authChangedAt;
+      authFresh =
+          changedAt != null &&
+          now.difference(changedAt) < _authRefreshWindow;
+      if (authFresh) _authChangedAt = null;
+
+      if (!authFresh) {
+        final lastForced = _lastForcedRefreshAt;
+        if (lastForced != null &&
+            now.difference(lastForced) < _minHomeRefreshGap) {
+          AppLog.add('home', 'force 刷新最小间隔内被抑制');
+          _suppressedHomeRefreshes++;
+          final running = _homeInFlight;
+          if (running != null) await running;
+          return;
+        }
+      }
+    }
+
+    final running = _homeInFlight;
+    if (running != null) {
+      if (!force || !authFresh) {
+        if (force) _suppressedHomeRefreshes++;
+        return running;
+      }
+      // 登录后的强制刷新允许在旧请求结束后再补一次，但只补一次。
+      await running;
+    }
+
+    if (force) {
+      _lastForcedRefreshAt = now;
       _homeRetryBlockedUntil = null;
       api.clearAuthCooldown();
     }
-    final running = _homeInFlight;
-    if (running != null) {
-      if (!force) return running;
-      await running;
-      return loadHome(force: true);
-    }
-    final now = DateTime.now();
     if (!force &&
         _homeRetryBlockedUntil != null &&
         now.isBefore(_homeRetryBlockedUntil!)) {
@@ -216,7 +265,9 @@ class AppState extends ChangeNotifier {
     try {
       await future;
     } finally {
-      if (identical(_homeInFlight, future)) _homeInFlight = null;
+      if (identical(_homeInFlight, future)) {
+        _homeInFlight = null;
+      }
     }
   }
 
@@ -238,10 +289,9 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  /// 首页刷新：清 30 秒冷却并强制重新请求；登录回调也走这里。
+  /// 首页刷新：显式用户刷新/登录回调仍可强制，但由 [loadHome] 做
+  /// 最小间隔、鉴权冷却与并发合并，避免空卡片点击放大成请求风暴。
   Future<void> refreshHome({bool force = true}) async {
-    _homeRetryBlockedUntil = null;
-    api.clearAuthCooldown();
     _homeRefreshSeed++;
     await loadHome(force: force);
   }
@@ -780,13 +830,24 @@ class AppState extends ChangeNotifier {
 
   static bool _looksUnplayable(String? message) {
     if (message == null || message.isEmpty) return false;
+    final lower = message.toLowerCase();
     return message.contains('142400') ||
+        message.contains('142411') ||
+        lower.contains('super diamond vip') ||
+        message.contains('超级钻石') ||
+        message.contains('VIP 专享') ||
+        lower.contains('vip only') ||
         message.contains('没有可用') ||
         message.contains('无版权') ||
         message.contains('版权') ||
-        message.contains('not available') ||
+        lower.contains('not available') ||
         message.contains('不可播放');
   }
+
+  /// 测试/诊断用：与 [play] 的自动跳歌判定保持同一套规则。
+  @visibleForTesting
+  static bool looksUnplayable(String? message) =>
+      _looksUnplayable(message);
 
   /// 供 UI 在修改局部状态后请求重建（避免外部直接调用受保护的 notifyListeners）
   void refresh() => notifyListeners();
@@ -852,9 +913,10 @@ class AppState extends ChangeNotifier {
         musicToken: snapshot.huaweiToken,
         snsUserId: snapshot.huaweiUserId,
         accountToken: snapshot.huaweiAccountToken,
-        refreshToken: snapshot.huaweiAccountToken.isNotEmpty
-            ? snapshot.huaweiAccountToken
+        refreshToken: snapshot.huaweiRefreshToken.isNotEmpty
+            ? snapshot.huaweiRefreshToken
             : null,
+        expireTime: snapshot.huaweiExpireTime,
         nick: snapshot.huaweiNickname,
       );
       api.avatarUrl = snapshot.huaweiAvatar.isEmpty
@@ -864,8 +926,29 @@ class AppState extends ChangeNotifier {
           ? null
           : snapshot.huaweiMemberLabel;
       api.isMember = snapshot.huaweiIsMember;
-      // 后台补全真实昵称/头像/会员；失败不影响启动。
-      api.refreshProfile();
+      if (api.gateway.session?.isExpired ?? false) {
+        // 音乐 token 过期时先尝试用账号 AT 换一次会话；换不到就明确
+        // 要求重新登录，而不是先发 5 路业务请求吃 990000。
+        final accountToken = snapshot.huaweiAccountToken;
+        if (accountToken.isEmpty) {
+          api.gateway.session = null;
+          error = '登录已过期，请重新扫码登录华为账号';
+          AppLog.add('state', '音乐会话已过期且没有账号 token');
+        } else {
+          try {
+            await api.gateway.exchangeMusicToken(accountToken);
+            AppLog.add('state', '音乐会话已过期，已用账号 token 刷新');
+            api.refreshProfile();
+          } catch (e) {
+            api.gateway.session = null;
+            error = '登录已过期，请重新扫码登录华为账号';
+            AppLog.add('state', '音乐会话刷新失败：$e');
+          }
+        }
+      } else {
+        // 后台补全真实昵称/头像/会员；失败不影响启动。
+        api.refreshProfile();
+      }
     }
     if (snapshot.neteaseMusicU.isNotEmpty) {
       netease.signInWithCookies(
@@ -903,6 +986,8 @@ class AppState extends ChangeNotifier {
         huaweiToken: api.gateway.session?.token ?? '',
         huaweiUserId: api.gateway.session?.snsUserId ?? '',
         huaweiAccountToken: api.gateway.accountToken ?? '',
+        huaweiRefreshToken: api.gateway.refreshToken ?? '',
+        huaweiExpireTime: api.gateway.session?.expireTime ?? '',
         huaweiNickname: api.displayName ?? '',
         huaweiAvatar: api.avatarUrl ?? '',
         huaweiMemberLabel: api.memberLabel ?? '',
@@ -924,6 +1009,9 @@ class AppState extends ChangeNotifier {
     netease.signOut();
     kugou.signOut();
     qq.signOut();
+    _authChangedAt = null;
+    _lastForcedRefreshAt = null;
+    _homeRetryBlockedUntil = null;
     _sessionStore.clear();
     homeSongs = <Song>[];
     favorites = <Song>[];

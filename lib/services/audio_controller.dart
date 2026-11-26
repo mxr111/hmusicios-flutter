@@ -229,9 +229,12 @@ class MuyuAudioController extends ChangeNotifier {
         (f) => f.quality == wanted,
         orElse: () => files.first,
       );
+      error = null;
       AppLog.add(
         'play',
         '${song.name} [${song.id}] ${chosen.quality.name} '
+        'qualityType=${chosen.qualityType} size=${chosen.sizeBytes} '
+        'preview=${chosen.preview} '
         '${chosen.url.scheme}://${chosen.url.host}${chosen.url.path}',
       );
       final local = await LeaseProxy.instance.publish(chosen.url);
@@ -252,7 +255,10 @@ class MuyuAudioController extends ChangeNotifier {
       _acceptStartingDuration = false;
       _activePlayback = false;
       error = e.toString();
-      AppLog.add('play', 'error ${song.name} [${song.id}]: $e');
+      AppLog.add(
+        'play',
+        'error ${song.name} [${song.id}] quality=${quality.name}: $e',
+      );
       notifyListeners();
     }
   }
