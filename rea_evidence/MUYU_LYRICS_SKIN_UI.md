@@ -72,3 +72,18 @@
 - `muyu_window2.png`：展开态（几何艺术字）截图
 - `all-sym-addrs.tsv`：sonnet/ui 函数地址
 - `decomp_ui_*.json`：Ghidra 函数级伪代码（生成中）
+
+## 7. 分页与首页推荐交互（2026-11-26 UI 修订）
+
+- `widgets/common.dart` 新增 `PaginationBar`、`PaginatedList<T>`、`PaginatedGrid<T>`、
+  `PaginatedSongList`：每页只构建当前页 item，显示「第 x / y 页」与首页/上一页/
+  下一页/末页；页码切换只改 widget 本地状态，不调用 `refreshHome` 或任何接口。
+- 已接入歌单/榜单/专辑详情、搜索歌曲/歌手/专辑、收藏、本地音乐、歌手歌曲、
+  播放队列、唱片架、音乐厅榜单、网易云推荐流；首页推荐歌单等横滑卡片保持横滑。
+- 点歌统一由调用方把完整歌曲列表传给 `playSongFromList` → `state.play(song, queue: 完整列表)`，
+  分页只影响渲染，不截断播放队列。
+- 首页 5 张推荐卡不再在空数据时只弹 SnackBar，而是进入独立分页详情页；空板块在该页显示
+  空态和显式「重试」按钮，只有用户点击重试才触发 `refreshHome(force: true)`。
+- 「为你推荐 / 推荐歌单 / 热歌榜」标题可打开对应的分页完整列表页。
+- 歌手详情简介默认折叠为 3 行，状态保存在 `_ArtistBio` 局部 widget；展开后可查看全文，
+  `SelectionArea` 保留复制能力。

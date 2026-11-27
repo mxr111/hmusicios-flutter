@@ -58,6 +58,8 @@ void main() {
         'playlists=${data.playlists.length} charts=${data.charts.length} '
         'column=${data.recommendedColumnId}',
       );
+      // ignore: avoid_print
+      print('NOW PLAYING listen count=${data.listen.length}');
       for (final song in data.recommended.take(8)) {
         // ignore: avoid_print
         print('REC ${song.id} ${song.name} qualities=${song.qualities}');
@@ -97,18 +99,18 @@ void main() {
         } catch (_) {}
       }
 
-      for (final mode in const <String>['1', '2', '3']) {
-        try {
-          final songs = await api.privateRadio(mode: mode);
-          // ignore: avoid_print
-          print(
-            'PRIVATE FM mode=$mode count=${songs.length} '
-            'first=${songs.take(3).map((s) => s.name).toList()}',
-          );
-        } catch (e) {
-          // ignore: avoid_print
-          print('PRIVATE FM mode=$mode ERR $e');
-        }
+      try {
+        final page = await api.heartFmFirstPage();
+        // Do not print refInfo or token contents; lengths/flags only.
+        // ignore: avoid_print
+        print(
+          'HEART FM count=${page.songs.length} '
+          'nextLen=${page.next.length} hasNext=${page.next.isNotEmpty} '
+          'more=${page.more}',
+        );
+      } catch (e) {
+        // ignore: avoid_print
+        print('HEART FM ERR $e');
       }
 
       final featured = await api.featuredSongs();

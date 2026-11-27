@@ -92,10 +92,9 @@ class LeaseProxy {
           final value = values.join(', ').toLowerCase();
           // 华为 CDN 实测会返回 application/x-zerosize；AVPlayer 可能
           // 因此无法正确探测时长。按扩展名给出标准 MIME。
-          if (value.isNotEmpty &&
-              !value.contains('zerosize') &&
-              !value.contains('octet-stream')) {
-            response.headers.set(name, values.join(', '));
+          final normalized = _normalizeContentType(value);
+          if (normalized != null) {
+            response.headers.set('Content-Type', normalized);
             hasContentType = true;
           }
           return;
@@ -152,5 +151,25 @@ class LeaseProxy {
     if (path.endsWith('.wav')) return 'audio/wav';
     if (path.endsWith('.ogg') || path.endsWith('.oga')) return 'audio/ogg';
     return null;
+  }
+
+  /// 播放器对非标准写法兼容性不同：日志里华为 FLAC 返回
+  /// `audio/x-flac`，iOS AVPlayer 在 setSource 阶段直接失败。
+  /// 代理层统一成标准 MIME，减少容器识别失败。
+  static String? _normalizeContentType(String raw) {
+    final value = raw.split(';').first.trim().toLowerCase();
+    if (value.isEmpty ||
+        value.contains('zerosize') ||
+        value.contains('octet-stream')) {
+      return null;
+    }
+    return switch (value) {
+      'audio/x-flac' => 'audio/flac',
+      'audio/x-m4a' => 'audio/mp4',
+      'audio/x-wav' => 'audio/wav',
+      'audio/x-ogg' => 'audio/ogg',
+      'audio/mpeg3' || 'audio/x-mpeg-3' => 'audio/mpeg',
+      _ => value,
+    };
   }
 }

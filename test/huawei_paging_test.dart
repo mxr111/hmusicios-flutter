@@ -11,6 +11,7 @@ class _PagedGateway extends HuaweiGateway {
   static const int artistTotal = 73;
   final List<int> favoriteStarts = <int>[];
   final List<int> artistStarts = <int>[];
+  final List<Map<String, dynamic>> searchBodies = <Map<String, dynamic>>[];
 
   Map<String, dynamic> _song(int i) => <String, dynamic>{
         'contentID': 'song-$i',
@@ -42,6 +43,7 @@ class _PagedGateway extends HuaweiGateway {
       throw StateError('artistSongs should use GET');
     }
     if (path == HuaweiPaths.search) {
+      searchBodies.add(Map<String, dynamic>.from(body));
       switch ('${body['contentType']}') {
         case '2':
           return <String, dynamic>{
@@ -60,6 +62,16 @@ class _PagedGateway extends HuaweiGateway {
                 'artistCode': 'a1',
                 'artistName': '周杰伦',
                 'bigImgURL': 'https://test.dbankcdn.cn/a.jpg',
+              },
+            ],
+          };
+        case '4':
+          return <String, dynamic>{
+            'playListInfos': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'playListID': 'pl1',
+                'playListName': '周杰伦歌单',
+                'songNum': 30,
               },
             ],
           };
@@ -120,7 +132,7 @@ void main() {
     expect(gateway.calls, 2);
   });
 
-  test('搜索同时解析歌曲 / 歌手 / 专辑', () async {
+  test('搜索同时解析歌曲 / 歌手 / 专辑 / 歌单', () async {
     final api = HuaweiAPI(gateway: _PagedGateway());
     final result = await api.searchAll('周杰伦');
 
@@ -130,6 +142,9 @@ void main() {
     expect(result.albums.single.name, '叶惠美');
     expect(result.albums.single.kind, 'album');
     expect(result.albums.single.songCount, 11);
+    expect(result.playlists.single.name, '周杰伦歌单');
+    expect(result.playlists.single.kind, 'playlist');
+    expect(result.playlists.single.songCount, 30);
   });
 }
 

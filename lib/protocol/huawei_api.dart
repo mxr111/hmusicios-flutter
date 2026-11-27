@@ -97,10 +97,30 @@ class DiscoverBanner {
   final Uri? imageUrl;
 }
 
+/// 私人电台单页结果。游标字段只在响应真实给出时才有值，无法解析时保持空
+/// 游标 / `more=false`，避免客户端伪造续播状态。
+class HuaweiPrivateFmPage {
+  const HuaweiPrivateFmPage({
+    this.songs = const <Song>[],
+    this.next = '',
+    this.more = false,
+    this.refInfo = '',
+    this.rcmScenario = '16',
+    this.mode = '1',
+  });
+  final List<Song> songs;
+  final String next;
+  final bool more;
+  final String refInfo;
+  final String rcmScenario;
+  final String mode;
+}
+
 class _HomeBatch {
-  _HomeBatch(this.id, this.label);
+  _HomeBatch(this.id, this.label, {this.topLevel = false});
   final String id;
   final String label;
+  final bool topLevel;
   final List<Song> songs = <Song>[];
 }
 
@@ -110,12 +130,31 @@ class HuaweiSearchResult {
     this.songs = const <Song>[],
     this.artists = const <Artist>[],
     this.albums = const <Playlist>[],
+    this.playlists = const <Playlist>[],
   });
   final List<Song> songs;
   final List<Artist> artists;
 
   /// 专辑复用 Playlist 卡片模型，kind 固定为 'album'。
   final List<Playlist> albums;
+
+  /// 搜索结果中的歌单（contentType=4），kind 固定为 'playlist'。
+  final List<Playlist> playlists;
+}
+
+/// 取流响应里与音质无关的歌词地址，缓存后供歌词加载复用。
+class _PlaybackLyrics {
+  const _PlaybackLyrics({this.wordUrl, this.plainUrl});
+
+  final Uri? wordUrl;
+  final Uri? plainUrl;
+
+  bool get isEmpty => wordUrl == null && plainUrl == null;
+
+  _PlaybackLyrics merge(_PlaybackLyrics other) => _PlaybackLyrics(
+    wordUrl: wordUrl ?? other.wordUrl,
+    plainUrl: plainUrl ?? other.plainUrl,
+  );
 }
 
 /// 与沐语 Go 版 internal/catalog 对等：首页 / 搜索 / 榜单 / 收藏 / 歌单 /
@@ -124,6 +163,9 @@ class HuaweiAPI {
   HuaweiAPI({HuaweiGateway? gateway}) : gateway = gateway ?? HuaweiGateway();
 
   final HuaweiGateway gateway;
+  static const int _maxPlaybackLyrics = 64;
+  final Map<String, _PlaybackLyrics> _playbackLyrics =
+      <String, _PlaybackLyrics>{};
   String? displayName;
   String? avatarUrl;
   String? memberLabel;
@@ -359,38 +401,50 @@ class HuaweiAPI {
     ]).map(parseSong).toList();
   }
 
-  /// 搜索一次请求，同时解析歌曲 / 歌手 / 专辑。
-  /// 华为 fuzzysearch 以 songSimpleInfos 为主；若响应携带
-  /// artistSimpleInfos / albumSimpleInfos 则一并展示，没有就不造数据。
+  /// 搜索一次请求，同时解析歌曲 / 专辑 / 歌手 / 歌单。
+  /// 华为 fuzzysearch 按 contentType 分开返回；单类失败只留该类的空结果，
+  /// 全部类型都失败时抛出可读错误，不能把“请求失败”伪装成“没有结果”。
   Future<HuaweiSearchResult> searchAll(
     String keyword, {
     int start = 0,
     int limit = 30,
+    bool includePlaylists = true,
   }) async {
-    Future<Map<String, dynamic>?> searchType(String type) async {
+    final jsons = <String, Map<String, dynamic>>{};
+    final failures = <String, String>{};
+
+    Future<void> searchType(String type) async {
       try {
-        return await _searchJson(
+        jsons[type] = await _searchJson(
           keyword,
           start: start,
           limit: limit,
           contentType: type,
         );
-      } catch (_) {
-        return null;
+      } catch (e) {
+        final code = _errorCode(e);
+        failures[type] = code;
+        AppLog.add(
+          'search',
+          'contentType=$type start=$start limit=$limit count=0 error=$code',
+        );
       }
     }
 
     // 运行时实测：contentType 1=歌曲、2=专辑、3=歌手、4=歌单。
-    final results = await Future.wait<Map<String, dynamic>?>(
-      <Future<Map<String, dynamic>?>>[
-        searchType('1'),
-        searchType('2'),
-        searchType('3'),
-      ],
-    );
-    final songJson = results[0] ?? const <String, dynamic>{};
-    final albumJson = results[1] ?? const <String, dynamic>{};
-    final artistJson = results[2] ?? const <String, dynamic>{};
+    final types = <String>['1', '2', '3', if (includePlaylists) '4'];
+    await Future.wait<void>(types.map(searchType));
+    if (jsons.isEmpty) {
+      final details = types
+          .map((type) => '$type=${failures[type] ?? 'unknown'}')
+          .join(', ');
+      throw HuaweiException('华为搜索失败（${types.join('/')}）：$details');
+    }
+
+    final songJson = jsons['1'] ?? const <String, dynamic>{};
+    final albumJson = jsons['2'] ?? const <String, dynamic>{};
+    final artistJson = jsons['3'] ?? const <String, dynamic>{};
+    final playlistJson = jsons['4'] ?? const <String, dynamic>{};
     final songs = deepList(songJson, const [
       'songSimpleInfos',
       'contentSimpleInfos',
@@ -412,7 +466,32 @@ class HuaweiAPI {
       'albumInfos',
       'result',
     ]).map(parseAlbum).where((a) => a.name.isNotEmpty).toList();
-    return HuaweiSearchResult(songs: songs, artists: artists, albums: albums);
+    final playlists =
+        deepList(playlistJson, const [
+              'playListInfos',
+              'playlistInfos',
+              'mixPlaylistInfos',
+              'contentSimpleInfos',
+              'result',
+            ])
+            .map(parsePlaylist)
+            .where((p) => p.id.isNotEmpty && p.name.isNotEmpty)
+            .map(
+              (p) => Playlist(
+                id: p.id,
+                name: p.name,
+                cover: p.cover,
+                songCount: p.songCount,
+                kind: 'playlist',
+              ),
+            )
+            .toList();
+    return HuaweiSearchResult(
+      songs: songs,
+      artists: artists,
+      albums: albums,
+      playlists: playlists,
+    );
   }
 
   Future<Map<String, dynamic>> _searchJson(
@@ -632,22 +711,35 @@ class HuaweiAPI {
   }
 
   /// 歌词（源码事实 tinglan/catalog.go Lyrics）：歌词地址随播放响应返回，
-  /// 不从曲库详情取。优先逐字 HMRC（wordByWordLyric），再行级 LRC
+  /// 不从曲库详情取。默认只复用 `audioFiles` 取流响应里缓存的歌词地址；
+  /// 仅显式传 `allowPlaybackRequest: true` 时才以 `qualityType='1'` 补发
+  /// playUrl 兜底（live probe 使用）。优先逐字 HMRC（wordByWordLyric），再行级 LRC
   /// （lineByLineLyric / lyricAddress），并把译文合并进对应行。
-  Future<List<LyricLine>> lyrics(String songCode) async {
-    // 复用取流响应：歌词地址在 fileURL 同一个响应里。
-    final json = await gateway.request(
-      HuaweiPaths.playUrl,
-      body: <String, dynamic>{
-        'contentCode': songCode,
-        'contentType': '1',
-        'qualityType': '1',
-      },
-    );
+  Future<List<LyricLine>> lyrics(
+    String songCode, {
+    bool allowPlaybackRequest = false,
+  }) async {
+    final code = songCode.trim();
+    var sources = _playbackLyrics[code];
+    if (sources == null && allowPlaybackRequest) {
+      // 仅在调用方显式 opt-in 时补发；播放链路只复用取流响应缓存。
+      final json = await gateway.request(
+        HuaweiPaths.playUrl,
+        body: <String, dynamic>{
+          'contentCode': code,
+          'contentType': '1',
+          'qualityType': '1',
+        },
+      );
+      sources = _lyricSourcesFrom(json);
+    }
+    if (sources == null || sources.isEmpty) return <LyricLine>[];
+    return _fetchLyrics(sources);
+  }
 
+  _PlaybackLyrics _lyricSourcesFrom(dynamic json) {
     Uri? wordUrl; // 逐字 HMRC
     Uri? plainUrl; // 行级 LRC
-    String? plainText; // 内嵌 LRC 文本
     // 递归收集 lyricAddress / lineByLineLyric / wordByWordLyric / lyrics。
     _collectLyricFields(json, (key, value) {
       if (value is! String || value.isEmpty) return;
@@ -661,15 +753,19 @@ class HuaweiAPI {
         if (u != null) plainUrl ??= u;
       }
     });
+    return _PlaybackLyrics(wordUrl: wordUrl, plainUrl: plainUrl);
+  }
 
+  Future<List<LyricLine>> _fetchLyrics(_PlaybackLyrics sources) async {
     List<LyricLine> lines = <LyricLine>[];
-    final wu = wordUrl;
+    String? plainText; // 内嵌 LRC 文本
+    final wu = sources.wordUrl;
     if (wu != null) {
       try {
         lines = parseHmrc(await gateway.fetchText(wu));
       } catch (_) {}
     }
-    final pu = plainUrl;
+    final pu = sources.plainUrl;
     if (pu != null) {
       try {
         plainText = await gateway.fetchText(pu);
@@ -684,6 +780,16 @@ class HuaweiAPI {
       }
     }
     return lines;
+  }
+
+  void _rememberPlaybackLyrics(String code, Map<String, dynamic> json) {
+    final next = _lyricSourcesFrom(json);
+    if (next.isEmpty) return;
+    final previous = _playbackLyrics.remove(code);
+    _playbackLyrics[code] = previous == null ? next : previous.merge(next);
+    while (_playbackLyrics.length > _maxPlaybackLyrics) {
+      _playbackLyrics.remove(_playbackLyrics.keys.first);
+    }
   }
 
   /// 直接抓取搜索结果里携带的歌词 URL（HMRC 或 LRC）。
@@ -753,6 +859,10 @@ class HuaweiAPI {
     String songCode, {
     Set<AudioQuality>? upstreamQualities,
   }) async {
+    final code = songCode.trim();
+    if (code.isEmpty) {
+      throw const HuaweiException('歌曲缺少 contentCode（列表解析异常），无法取流');
+    }
     final out = <HuaweiAudioFile>[];
     // 只请求上游声明可用的档位；按从高到低，避免无谓请求。
     final wanted =
@@ -791,7 +901,7 @@ class HuaweiAPI {
           result = await gateway.request(
             HuaweiPaths.playUrl,
             body: <String, dynamic>{
-              'contentCode': songCode,
+              'contentCode': code,
               'contentType': '1',
               'qualityType': typeCode,
             },
@@ -837,9 +947,9 @@ class HuaweiAPI {
           lastMessage = failedMessage ?? lastMessage;
           AppLog.add(
             'play',
-            'bycontentcode song=$songCode qualityType=$typeCode '
-            'code=${failedCode ?? 'no-response'} hasUrl=false preview=false '
-            'msg=${(failedMessage ?? '').replaceAll(RegExp(r'\s+'), ' ')}',
+            'bycontentcode song=$code qualityType=$typeCode '
+                'code=${failedCode ?? 'no-response'} hasUrl=false preview=false '
+                'msg=${(failedMessage ?? '').replaceAll(RegExp(r'\s+'), ' ')}',
           );
           continue;
         }
@@ -853,10 +963,10 @@ class HuaweiAPI {
         if (preview) sawPreview = true;
         AppLog.add(
           'play',
-          'bycontentcode song=$songCode qualityType=$typeCode '
-          'code=000000 hasUrl=${candidate != null} preview=$preview '
-          '${_fragmentFlag(json)} '
-          'url=${candidate == null ? '' : _audioUrlSuffix(candidate)}',
+          'bycontentcode song=$code qualityType=$typeCode '
+              'code=000000 hasUrl=${candidate != null} preview=$preview '
+              '${_fragmentFlag(json)} '
+              'url=${candidate == null ? '' : _audioUrlSuffix(candidate)}',
         );
         if (candidate == null || !_safeAudioUrl(candidate) || preview) {
           lastMessage = candidate == null
@@ -864,6 +974,7 @@ class HuaweiAPI {
               : (preview ? '仅返回试听片段' : 'URL 域名不在白名单');
           continue;
         }
+        _rememberPlaybackLyrics(code, json);
 
         // 以实际请求到的 qualityType 为准：5/7=Hi-Res，3=SQ，1/2=标准。
         final actual = switch (typeCode) {
@@ -877,11 +988,7 @@ class HuaweiAPI {
               quality: actual,
               url: candidate,
               sizeBytes:
-                  HuaweiGateway.firstInt(json, const [
-                    'size',
-                    'fileSize',
-                  ]) ??
-                  0,
+                  HuaweiGateway.firstInt(json, const ['size', 'fileSize']) ?? 0,
               qualityType: typeCode,
             ),
           );
@@ -901,16 +1008,16 @@ class HuaweiAPI {
           ? '超级钻石 VIP 专享，当前账号无播放权限'
           : (sawPreview ? '只有试听片段，没有完整音质' : '没有可用的完整音质档位');
       throw HuaweiException(
-        '华为取流失败（歌曲 $songCode，码 ${lastCode ?? 'unknown'}，'
+        '华为取流失败（歌曲 $code，码 ${lastCode ?? 'unknown'}，'
         '最终档位 $lastTier）：$reason',
       );
     }
     final chosen = out.first;
     AppLog.add(
       'play',
-      'bycontentcode song=$songCode choose=${chosen.quality.name} '
-      'qualityType=${chosen.qualityType} size=${chosen.sizeBytes} '
-      'preview=${chosen.preview}',
+      'bycontentcode song=$code choose=${chosen.quality.name} '
+          'qualityType=${chosen.qualityType} size=${chosen.sizeBytes} '
+          'preview=${chosen.preview}',
     );
     return out;
   }
@@ -944,9 +1051,7 @@ class HuaweiAPI {
         text.contains('会话已过期');
     return HuaweiBusinessException(
       code,
-      text.isEmpty
-          ? hint
-          : (hasHint ? text : '$hint：$text'),
+      text.isEmpty ? hint : (hasHint ? text : '$hint：$text'),
       path: path,
     );
   }
@@ -999,7 +1104,9 @@ class HuaweiAPI {
     final flag = json['playFragmentFlag'];
     final fragment = json['fragmentInfo'];
     final has = fragment is Map ? '${fragment['hasFragement']}' : '';
-    return 'fragmentFlag=${flag ?? '-'} hasFragment=${has.isEmpty ? '-' : has}';
+    return 'fragmentFlag=${flag ?? '-'} hasFragment=${has.isEmpty ? '-' : has} '
+        'auditionEnd=${json['auditionEnd'] ?? '-'} '
+        'auditionTime=${json['auditionTime'] ?? '-'}';
   }
 
   static String _audioUrlSuffix(Uri url) {
@@ -1025,11 +1132,13 @@ class HuaweiAPI {
   }
 
   /// 试听片段识别：Hi-Res 无权限时网关仍返回 200 + fileURL，但只有
-  /// 30/60 秒，`auditionEnd`/`auditionTime` 或 URL 的 `_AQ`/`_PV` 后缀可判定。
+  /// 30/60 秒。`/preview/` 与 URL 的 `_AQ`/`_PV` 后缀是强判定；
+  /// `auditionEnd`/`auditionTime` 只作为日志里的弱信号辅助排障。
   /// 这类地址绝不能当成完整歌曲交给播放器。
   static bool _isAudition(Map<String, dynamic> json, Uri url) {
     final path = url.path.toLowerCase();
-    if (path.endsWith('_aq.mp3') ||
+    if (path.contains('/preview/') ||
+        path.endsWith('_aq.mp3') ||
         path.endsWith('_pv.mp3') ||
         path.endsWith('_aq.flac') ||
         path.endsWith('_pv.flac')) {
@@ -1583,7 +1692,10 @@ class HuaweiAPI {
             'id',
             'songId',
           ]) ??
-          DateTime.now().microsecondsSinceEpoch.toString(),
+          // 缺真实 ID 时不再生成时间戳假 ID：假 ID 会让 UI 显示可点，
+          // 但 bycontentcode 必然失败。空 ID 由播放层给出可读错误，
+          // 首页列表则由 _dedupeSongs 过滤掉。
+          '',
       name:
           HuaweiGateway.firstString(d, const [
             'songName',
@@ -1856,17 +1968,11 @@ class HuaweiAPI {
   /// 首页不是一条流：聚合页给骨架，其余板块各自请求；任何一路失败只留空。
   Future<DiscoverData> discover() async {
     final homeFuture = _withAuthRetry(() => gateway.get(HuaweiPaths.home));
-    final featuredFuture = _homeSoft<Song>(
-      'featuredSongs',
-      featuredColumnId,
-      () => featuredSongs(),
-    );
     final dailyFuture = _homeSoft<Song>(
       'daily30',
       dailyPlaylistId,
       () => daily30(),
     );
-    final fmFuture = _homeSoft<Song>('privateFm', 'mode=1', () => privateFm());
     final playlistsFuture = _homeSoft<Playlist>(
       'recommendedPlaylists',
       'recommend/playlist',
@@ -1878,10 +1984,19 @@ class HuaweiAPI {
       () => chartSongs(hotChartId),
     );
 
-    final data = parseDiscover(await homeFuture);
+    final homeJson = await homeFuture;
+    final data = parseDiscover(homeJson);
+    // `page/detail/all` 的 recom_exclusive 栏目可能带自己的真实栏目号；
+    // 8011 只在聚合页没有给出可识别栏目号时兜底。
+    final explicitRecommendedColumnId = recommendedColumnIdFrom(homeJson);
+    final recommendedColumnId = explicitRecommendedColumnId ?? featuredColumnId;
+    final featuredFuture = _homeSoft<Song>(
+      'featuredSongs',
+      recommendedColumnId,
+      () => featuredSongs(columnId: recommendedColumnId, home: homeJson),
+    );
     final featured = await featuredFuture;
     final daily = await dailyFuture;
-    final fm = await fmFuture;
     final recommendedLists = await playlistsFuture;
     final hotChartSongs = await chartFuture;
 
@@ -1908,52 +2023,61 @@ class HuaweiAPI {
       );
     }
 
+    // 每个板块只吃自己的真实源：
+    // listen=page/detail/all 中 pmf001 顶层直接歌曲，daily=a001，
+    // hot=24926，heart/new=聚合页可证明归属的标签批次
+    // （心动首屏/续播由服务层另行调用 heartFmFirstPage/privateFmPage），
+    // recommended=8011/动态栏目。
+    // 任一独立源为空就保持空态，禁止跨板块轮询填充。
+    final listen = data.listen;
+    // 8011 / 动态 recom_exclusive 栏目为空就保持空态；聚合页里的
+    // data.recommended 只有在同一份 page 明确标出 recom_exclusive/8011
+    // 栏目号时才算同源补充，绝不能用 pmf001/daily/hot/radio 填充。
+    final embeddedRecommended =
+        explicitRecommendedColumnId != null && data.recommended.isNotEmpty
+        ? data.recommended
+        : const <Song>[];
+    final recommended = featured.isNotEmpty ? featured : embeddedRecommended;
+    final hot = hotChartSongs.isNotEmpty ? hotChartSongs : data.hot;
+    final heart = data.heart;
+    final newSongs = data.newSongs;
+    final dailySongs = daily.isNotEmpty ? daily : data.daily;
+
     final merged = data.copyWith(
-      recommended: featured.isNotEmpty ? featured : data.recommended,
-      recommendedColumnId: featuredColumnId,
-      daily: daily.isNotEmpty ? daily : data.daily,
-      listen: fm.isNotEmpty ? fm : data.listen,
+      recommended: recommended,
+      recommendedColumnId: recommendedColumnId,
       // 24926 是真实可用的 200 首榜单；热歌速递直接吃这份数据，
       // 不再使用 pmf001 剩余歌曲切出来的 ≤10 首推断列表。
-      hot: hotChartSongs.isNotEmpty ? hotChartSongs : data.hot,
+      daily: dailySongs,
+      listen: listen,
+      heart: heart,
+      newSongs: newSongs,
+      hot: hot,
       playlists: playlists,
       charts: charts,
     );
-    return _dedupeHomeSections(merged);
+    final result = _dedupeHomeSections(merged);
+    AppLog.add(
+      'home',
+      'discover final listen=${result.listen.length} '
+          'daily=${result.daily.length} heart=${result.heart.length} '
+          'new=${result.newSongs.length} hot=${result.hot.length} '
+          'recommended=${result.recommended.length} '
+          'radio=${result.radio.length} playlists=${result.playlists.length}',
+    );
+    return result;
   }
 
-  /// 首页六个歌曲板块必须互不重复。真实独立接口优先，pmf001 推断/切块
-  /// 的 heart/new 最后分配；同一首歌只保留在优先级最高的板块里。
+  /// 每个板块只在本板块内去重。跨板块上游返回同一首歌时，各自保留在
+  /// 自己的独立队列里；不能为了“看起来不同”把另一个板块整段删空。
   static DiscoverData _dedupeHomeSections(DiscoverData data) {
-    final seen = <String>{};
-    String key(Song song) =>
-        song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
-
-    List<Song> clean(Iterable<Song> songs) {
-      final out = <Song>[];
-      for (final song in songs) {
-        if (song.name.isEmpty || song.name == '未知歌曲') continue;
-        if (seen.add(key(song))) out.add(song);
-      }
-      return out;
-    }
-
-    // 每日30首(a001) / 现在就听(privatefm) / 为你推荐(8011) / 热歌(24926)
-    // 都是独立真实接口，先占位；heart/new 是推断数据，最后去重。
-    final daily = clean(data.daily);
-    final listen = clean(data.listen);
-    final recommended = clean(data.recommended);
-    final hot = clean(data.hot);
-    final heart = clean(data.heart);
-    final newSongs = clean(data.newSongs);
-
     return data.copyWith(
-      daily: daily,
-      listen: listen,
-      recommended: recommended,
-      hot: hot,
-      heart: heart,
-      newSongs: newSongs,
+      daily: _dedupeSongs(data.daily),
+      listen: _dedupeSongs(data.listen),
+      recommended: _dedupeSongs(data.recommended),
+      hot: _dedupeSongs(data.hot),
+      heart: _dedupeSongs(data.heart),
+      newSongs: _dedupeSongs(data.newSongs),
     );
   }
 
@@ -1970,8 +2094,27 @@ class HuaweiAPI {
   }
 
   /// 「为你推荐」：recom_exclusive / 8011 → column/detail/bycolumnid。
-  Future<List<Song>> featuredSongs({String columnId = featuredColumnId}) async {
-    final id = Uri.encodeQueryComponent(columnId);
+  /// 调用方传入聚合页 `columnInfoExs` 解析出的动态栏目号；未传时用 8011。
+  Future<List<Song>> featuredSongs({String? columnId, dynamic home}) async {
+    var resolved = columnId?.trim() ?? '';
+    if (resolved.isEmpty) {
+      if (home != null) {
+        resolved = recommendedColumnIdFrom(home) ?? '';
+      }
+      if (resolved.isEmpty) {
+        try {
+          final raw = await _withAuthRetry(() => gateway.get(HuaweiPaths.home));
+          resolved = recommendedColumnIdFrom(raw) ?? '';
+        } catch (e) {
+          AppLog.add(
+            'home',
+            'featuredSongs column lookup error=${_safeLogError(e)}',
+          );
+        }
+      }
+    }
+    if (resolved.isEmpty) resolved = featuredColumnId;
+    final id = Uri.encodeQueryComponent(resolved);
     final json = await _withAuthRetry(
       () => gateway.get(
         '$featuredColumnPath?columnId=$id&start=0&limit=30&hasRecommend=1',
@@ -1984,8 +2127,8 @@ class HuaweiAPI {
         _findNamedList(json, 'contentSimpleInfos').length;
     AppLog.add(
       'home',
-      'featuredSongs raw=$rawCount parsed=${songs.length} '
-      'empty=${songs.isEmpty}',
+      'featuredSongs column=$resolved raw=$rawCount parsed=${songs.length} '
+          'empty=${songs.isEmpty}',
     );
     return songs;
   }
@@ -2032,21 +2175,94 @@ class HuaweiAPI {
     ]).map(parseSong).toList();
   }
 
-  /// 私人电台：请求体字段来自 REA decompile(applicationRequest@0x1404225c0)。
-  /// cadence / rcmMode / rcmScenario / refInfo；rcmMode 仅接受 '1'/'2'/'3'。
-  Future<List<Song>> privateFm({String mode = '1'}) async {
+  /// 私人电台单页：请求体字段来自 REA decompile(applicationRequest@0x1404225c0)。
+  /// 证据（decompiled）：body 只有 `cadence` / `rcmMode` / `rcmScenario` /
+  /// `refInfo` 四个字符串字段，没有 `next`。`rcmMode` 只接受 '1'/'2'/'3'，
+  /// 非法值本地抛 ArgumentError，不发请求。
+  ///
+  /// `next` 参数保留只为兼容服务层：它是响应游标，不是请求字段。调用方没有
+  /// 显式给 `refInfo` 时，把 `next` 当作续页游标映射到 `refInfo`（inference，
+  /// 非 observed；`refInfo` 的真实非空格式仍 not-found）。显式 `refInfo` 优先。
+  Future<HuaweiPrivateFmPage> privateFmPage({
+    String mode = '1',
+    String rcmScenario = '16',
+    String refInfo = '',
+    String next = '',
+  }) async {
+    final rcmMode = mode.trim();
+    if (!const <String>{'1', '2', '3'}.contains(rcmMode)) {
+      throw ArgumentError.value(mode, 'mode', 'rcmMode 只支持 1/2/3');
+    }
+    // 已证实的 rcmScenario 分支是 '16'/'21'；其他值不本地臆造，原样透传。
+    final scenario = rcmScenario.trim().isEmpty ? '16' : rcmScenario.trim();
+    // refInfo 必须是字符串（服务端对数组会 400）。显式 refInfo 优先；为空时
+    // 才把旧参数 `next` 映射为续页游标。
+    var requestRefInfo = refInfo.trim();
+    if (requestRefInfo.isEmpty && next.trim().isNotEmpty) {
+      requestRefInfo = next.trim();
+    }
+    final body = <String, dynamic>{
+      'cadence': '',
+      'rcmMode': rcmMode,
+      'rcmScenario': scenario,
+      'refInfo': requestRefInfo,
+    };
     final json = await _withAuthRetry(
-      () => gateway.request(
-        HuaweiPaths.privateFm,
-        body: <String, dynamic>{
-          'cadence': '',
-          'rcmMode': mode,
-          'rcmScenario': '16',
-          'refInfo': <dynamic>[],
-        },
-      ),
+      () => gateway.request(HuaweiPaths.privateFm, body: body),
     );
-    return _dedupeSongs(
+    final page = _privateFmPageFromJson(
+      json,
+      requestRefInfo: requestRefInfo,
+      scenario: scenario,
+      mode: rcmMode,
+    );
+    // 只记录字段名 + 长度/布尔/数量：不输出游标或 refInfo 全文。
+    AppLog.add(
+      'home',
+      'privateFmPage mode=$rcmMode scenario=$scenario '
+          'refInfoLen=${requestRefInfo.length} nextLen=${page.next.length} '
+          'more=${page.more} count=${page.songs.length}',
+    );
+    return page;
+  }
+
+  /// 心动模式首屏。请求体来自 REA decompile：
+  /// `cadence:null`, `rcmMode:null`, `rcmScenario:"21"`, `refInfo` 由调用方
+  /// 提供（行为 JSON 字符串，客户端不硬编码、不猜测内容）。不含 `next`。
+  /// 这是 decompiled 契约，本轮没有 observed 200。
+  Future<HuaweiPrivateFmPage> heartFmFirstPage({String refInfo = ''}) async {
+    final body = <String, dynamic>{
+      'cadence': null,
+      'rcmMode': null,
+      'rcmScenario': '21',
+      'refInfo': refInfo,
+    };
+    final json = await _withAuthRetry(
+      () => gateway.request(HuaweiPaths.privateFm, body: body),
+    );
+    final page = _privateFmPageFromJson(
+      json,
+      requestRefInfo: refInfo,
+      scenario: '21',
+      mode: 'heart',
+    );
+    // 不输出 refInfo / token 全文，只记录字段名与长度/布尔/数量。
+    AppLog.add(
+      'home',
+      'heartFmFirstPage fields=cadence,rcmMode,rcmScenario,refInfo '
+          'refInfoLen=${refInfo.length} more=${page.more} '
+          'count=${page.songs.length}',
+    );
+    return page;
+  }
+
+  HuaweiPrivateFmPage _privateFmPageFromJson(
+    Map<String, dynamic> json, {
+    required String requestRefInfo,
+    required String scenario,
+    required String mode,
+  }) {
+    final songs = _dedupeSongs(
       deepList(json, const <String>[
         'listRcmInfos',
         'songSimpleInfos',
@@ -2056,30 +2272,92 @@ class HuaweiAPI {
         'data',
       ]).map(parseSong),
     );
+    final nextCursor = _cursorString(json, const <String>[
+      'next',
+      'nextIndex',
+      'nextStart',
+      'nextToken',
+      'nextCursor',
+    ]);
+    final more = _cursorBool(json, const <String>[
+      'more',
+      'hasMore',
+      'hasNext',
+      'hasNextPage',
+    ]);
+    final responseRefInfo = _cursorString(json, const <String>['refInfo']);
+    return HuaweiPrivateFmPage(
+      songs: songs,
+      next: nextCursor,
+      more: more,
+      refInfo: responseRefInfo.isEmpty ? requestRefInfo : responseRefInfo,
+      rcmScenario: scenario,
+      mode: mode,
+    );
   }
+
+  /// 兼容旧调用：只要单页歌曲，不暴露游标。
+  Future<List<Song>> privateFm({String mode = '1'}) async =>
+      (await privateFmPage(mode: mode)).songs;
 
   Future<List<Song>> privateRadio({String mode = '1'}) => privateFm(mode: mode);
 
   /// 推荐歌单：沐语 /recommend/playlist。
+  /// REA decompile 给出的 body 是 `contentCodes`（字符串数组）、
+  /// `limit`（数字）、`rcmScenario`（字符串）。该端点尚无 observed 200，
+  /// 本轮标记为 decompiled-unverified；失败/空响应回退同账号真实歌单，
+  /// 不让 live probe 整体中断。不要把这个 body 当成已验证可用。
   Future<List<Playlist>> recommendedPlaylists() async {
-    final json = await _withAuthRetry(
-      () => gateway.request(
-        HuaweiPaths.recommendPlaylist,
-        body: const <String, dynamic>{
-          'contentType': 1,
-          'start': 0,
-          'limit': 30,
-        },
-      ),
+    try {
+      final json = await _withAuthRetry(
+        () => gateway.request(
+          HuaweiPaths.recommendPlaylist,
+          body: const <String, dynamic>{
+            'contentCodes': <String>[],
+            'limit': 12,
+            'rcmScenario': '1',
+          },
+        ),
+      );
+      final parsed = deepList(json, const <String>[
+        'playListInfos',
+        'playlistInfos',
+        'contentSimpleInfos',
+        'songList',
+        'list',
+        'data',
+      ]).map(_playlistFromRecommend).where((p) => p.id.isNotEmpty).toList();
+      if (parsed.isNotEmpty) return parsed;
+      AppLog.add(
+        'home',
+        'recommendedPlaylists empty contract=decompiled-unverified',
+      );
+    } catch (e) {
+      AppLog.add(
+        'home',
+        'recommendedPlaylists error=${_safeLogError(e)} '
+            'contract=decompiled-unverified',
+      );
+    }
+    AppLog.add(
+      'home',
+      'recommend/playlist contract=decompiled-unverified '
+          'fallback=accountPlaylists',
     );
-    return deepList(json, const <String>[
-      'playListInfos',
-      'playlistInfos',
-      'contentSimpleInfos',
-      'songList',
-      'list',
-      'data',
-    ]).map(_playlistFromRecommend).where((p) => p.id.isNotEmpty).toList();
+    try {
+      final fallback = await playlists();
+      AppLog.add(
+        'home',
+        'recommendedPlaylists fallback count=${fallback.length}',
+      );
+      return fallback;
+    } catch (e) {
+      AppLog.add(
+        'home',
+        'recommendedPlaylists fallback error=${_safeLogError(e)}',
+      );
+      return const <Playlist>[];
+    }
   }
 
   static Playlist _playlistFromRecommend(Map<String, dynamic> d) {
@@ -2142,7 +2420,6 @@ class HuaweiAPI {
   /// 解析沐语首页 JSON。列名全部由 REA 反编译给出的字符串常量实测，不是猜测。
   static DiscoverData parseDiscover(dynamic root) {
     final columns = _findNamedList(root, 'columnInfoExs');
-    final genericSongs = <Song>[];
     final recommended = <Song>[];
     final sectionSongs = <Song>[];
     final a001Songs = <Song>[];
@@ -2153,25 +2430,38 @@ class HuaweiAPI {
     final banners = <DiscoverBanner>[];
     final features = <DiscoverFeature>[];
     final batches = <_HomeBatch>[];
+    final pmfTopSongs = <Song>[];
+    final recommendedColumnId = recommendedColumnIdFrom(root);
+
+    void collectDirect(Map<String, dynamic> content, List<Song> out) {
+      final type =
+          HuaweiGateway.firstString(content, const ['contentType']) ?? '';
+      final hasChildren = _directNamedList(
+        content,
+        'childSimpleInfos',
+      ).isNotEmpty;
+      final hasDirectSongList =
+          content['listRcmInfos'] is List || content['songSimpleInfos'] is List;
+      if (type == '1' || (type.isEmpty && !hasChildren && !hasDirectSongList)) {
+        out.add(parseSong(content));
+      }
+      // 只读当前 Map 的直接列表，避免把 childSimpleInfos 里兄弟批次的
+      // heart/new/hot 歌曲递归收集进顶层 listen。
+      for (final item in _directNamedList(content, 'listRcmInfos')) {
+        out.add(parseSong(item));
+      }
+      for (final item in _directNamedList(content, 'songSimpleInfos')) {
+        out.add(parseSong(item));
+      }
+    }
 
     void collectNested(Map<String, dynamic> content, List<Song> out) {
-      for (final item in _findNamedList(content, 'listRcmInfos')) {
-        out.add(parseSong(item));
-      }
-      for (final item in _findNamedList(content, 'songSimpleInfos')) {
-        out.add(parseSong(item));
-      }
-      for (final child in _findNamedList(content, 'childSimpleInfos')) {
+      collectDirect(content, out);
+      for (final child in _directNamedList(content, 'childSimpleInfos')) {
         final childType =
             HuaweiGateway.firstString(child, const ['contentType']) ?? '';
         if (childType == '2') continue;
-        if (childType == '1' || childType.isEmpty) out.add(parseSong(child));
-        for (final item in _findNamedList(child, 'listRcmInfos')) {
-          out.add(parseSong(item));
-        }
-        for (final item in _findNamedList(child, 'songSimpleInfos')) {
-          out.add(parseSong(item));
-        }
+        collectDirect(child, out);
       }
     }
 
@@ -2179,10 +2469,19 @@ class HuaweiAPI {
       final contentId = _contentIdFrom(content);
       final feature = _featureFrom(content);
       if (feature != null) features.add(feature);
-      final top = _HomeBatch(contentId.isEmpty ? 'pmf001' : contentId, label);
-      collectNested(content, top.songs);
-      if (top.songs.isNotEmpty) batches.add(top);
-      for (final child in _findNamedList(content, 'childSimpleInfos')) {
+      final top = _HomeBatch(
+        contentId.isEmpty ? 'pmf001' : contentId,
+        label,
+        topLevel: true,
+      );
+      // 顶层只收 pmf001 自己的歌曲；带 heart/new/hot 标签的子批次各自
+      // 独立成批，不能再被顶层“现在就听”整包吞掉。
+      collectDirect(content, top.songs);
+      if (top.songs.isNotEmpty) {
+        batches.add(top);
+        pmfTopSongs.addAll(top.songs);
+      }
+      for (final child in _directNamedList(content, 'childSimpleInfos')) {
         final childId = _contentIdFrom(child);
         final childBatch = _HomeBatch(
           childId.isEmpty ? 'pmf001' : childId,
@@ -2215,8 +2514,9 @@ class HuaweiAPI {
         switch (type) {
           case '1':
             final song = parseSong(content);
-            genericSongs.add(song);
-            if (columnId == featuredColumnId ||
+            if ((recommendedColumnId != null &&
+                    columnId == recommendedColumnId) ||
+                columnId == featuredColumnId ||
                 _isRecommendedLabel(columnLabel)) {
               recommended.add(song);
             }
@@ -2244,9 +2544,6 @@ class HuaweiAPI {
               if (childType == '2') {
                 albums.add(parseAlbum(child));
               } else {
-                if (childType == '1' || childType.isEmpty) {
-                  sectionSongs.add(parseSong(child));
-                }
                 collectNested(child, sectionSongs);
               }
             }
@@ -2266,9 +2563,6 @@ class HuaweiAPI {
 
     final embeddedAll = _dedupeSongs(batches.expand((b) => b.songs));
     radio.addAll(embeddedAll);
-    final used = <String>{};
-    String key(Song song) =>
-        song.id.isNotEmpty ? song.id : '${song.name}|${song.artistText}';
 
     String textOf(_HomeBatch b) => '${b.id} ${b.label}'.toLowerCase();
     bool isHeart(_HomeBatch b) =>
@@ -2279,87 +2573,25 @@ class HuaweiAPI {
         textOf(b).contains('newsong');
     bool isHot(_HomeBatch b) =>
         textOf(b).contains('hot') || textOf(b).contains('热歌');
-    bool isRecommended(_HomeBatch b) =>
-        textOf(b).contains('recommend') ||
-        textOf(b).contains('推荐') ||
-        textOf(b).contains('exclusive') ||
-        textOf(b).contains('私享');
 
     List<Song> takeSemantic(bool Function(_HomeBatch) test) {
-      final out = <Song>[];
+      final songs = <Song>[];
       for (final batch in batches) {
-        if (!test(batch)) continue;
-        for (final song in _dedupeSongs(batch.songs)) {
-          if (used.add(key(song))) out.add(song);
-        }
+        // 顶层 pmf001 是「现在就听」；heart/new/hot 只认子批次标签。
+        if (batch.topLevel || !test(batch)) continue;
+        songs.addAll(batch.songs);
       }
-      return out;
+      return _dedupeSongs(songs);
     }
 
-    var heart = takeSemantic(isHeart);
-    var newFromEmbedded = takeSemantic(isNew);
-    var hot = takeSemantic(isHot);
-    final recommendedEmbedded = takeSemantic(isRecommended);
+    final heart = takeSemantic(isHeart);
+    final newFromEmbedded = takeSemantic(isNew);
+    final hot = takeSemantic(isHot);
+    // 「现在就听」只来自 pmf001 当前层直接 listRcmInfos/songSimpleInfos；
+    // 不递归 childSimpleInfos 子批次，也不拿其他板块兜底。
+    final listen = _dedupeSongs(pmfTopSongs);
 
-    // 真实独立接口的歌曲先占位，避免 pmf001 切块与每日/8011 重复。
-    for (final song in <Song>[
-      ...recommended,
-      ...a001Songs,
-      ...sectionSongs,
-    ]) {
-      used.add(key(song));
-    }
-
-    // pmf001 中未被语义标签认领的批次是「现在就听」的独立候选。
-    final remaining = _dedupeSongs(<Song>[
-      for (final batch in batches)
-        if (!isHeart(batch) &&
-            !isNew(batch) &&
-            !isHot(batch) &&
-            !isRecommended(batch))
-          ..._dedupeSongs(batch.songs),
-    ].where((song) => !used.contains(key(song))));
-
-    var listen = <Song>[];
-    final emptySlots = <String>[
-      if (listen.isEmpty) 'listen',
-      if (recommended.isEmpty && recommendedEmbedded.isEmpty) 'recommended',
-      if (heart.isEmpty) 'heart',
-      if (newFromEmbedded.isEmpty) 'new',
-      if (hot.isEmpty) 'hot',
-    ];
-    if (remaining.isNotEmpty && emptySlots.isNotEmpty) {
-      for (var i = 0; i < emptySlots.length; i++) {
-        // 轮询分配而不是整块切分：剩余歌曲少于空槽数时，后面的卡片
-        // 也不会整块为空。
-        final part = <Song>[
-          for (var j = i; j < remaining.length; j += emptySlots.length)
-            remaining[j],
-        ];
-        switch (emptySlots[i]) {
-          case 'listen':
-            listen = part;
-            break;
-          case 'recommended':
-            recommended.addAll(part);
-            break;
-          case 'heart':
-            heart = part;
-            break;
-          case 'new':
-            newFromEmbedded = part;
-            break;
-          case 'hot':
-            hot = part;
-            break;
-        }
-      }
-    }
-
-    final newSongs = _dedupeSongs(<Song>[
-      ...sectionSongs,
-      ...newFromEmbedded,
-    ]);
+    final newSongs = _dedupeSongs(<Song>[...sectionSongs, ...newFromEmbedded]);
     final seenLists = <String>{};
     playlists.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
     charts.removeWhere((p) => p.id.isNotEmpty && !seenLists.add(p.id));
@@ -2374,14 +2606,11 @@ class HuaweiAPI {
       charts: charts,
       radio: _dedupeSongs(radio),
       albums: albums,
-      recommended: _dedupeSongs(<Song>[
-        ...recommended,
-        ...recommendedEmbedded,
-      ]).take(30).toList(),
+      recommended: _dedupeSongs(recommended).take(30).toList(),
       listen: _dedupeSongs(listen).take(30).toList(),
       heart: _dedupeSongs(heart).take(30).toList(),
       hot: _dedupeSongs(hot).take(10).toList(),
-      recommendedColumnId: featuredColumnId,
+      recommendedColumnId: recommendedColumnId ?? featuredColumnId,
       features: features,
       daily: _dedupeSongs(a001Songs),
     );
@@ -2392,13 +2621,82 @@ class HuaweiAPI {
     final out = <Song>[];
     for (final song in input) {
       if (song.name.isEmpty || song.name == '未知歌曲') continue;
-      final key = song.id.isNotEmpty
-          ? song.id
-          : '${song.name}|${song.artistText}';
+      // 没有真实 contentCode 的条目无法取流；不要用时间戳假 ID 或
+      // name 冒充歌曲码，列表里直接丢弃，避免“能点但一定播不了”。
+      if (song.id.isEmpty) continue;
+      final key = song.id;
       if (!seen.add(key)) continue;
       out.add(song);
     }
     return out;
+  }
+
+  static dynamic _findDeepKeyValue(dynamic root, String key) {
+    if (root is Map) {
+      if (root.containsKey(key)) return root[key];
+      for (final value in root.values) {
+        final found = _findDeepKeyValue(value, key);
+        if (found != null) return found;
+      }
+    } else if (root is List) {
+      for (final value in root) {
+        final found = _findDeepKeyValue(value, key);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  static String _cursorString(dynamic root, List<String> keys) {
+    for (final key in keys) {
+      final value = _findDeepKeyValue(root, key);
+      if (value is String) {
+        final text = value.trim();
+        if (text.isNotEmpty) return text;
+      } else if (value is num) {
+        return value.toString();
+      }
+    }
+    return '';
+  }
+
+  static bool _cursorBool(dynamic root, List<String> keys) {
+    for (final key in keys) {
+      final value = _findDeepKeyValue(root, key);
+      if (value is bool) return value;
+      if (value is num) return value != 0;
+      if (value is String) {
+        switch (value.trim().toLowerCase()) {
+          case '1':
+          case 'true':
+          case 'yes':
+            return true;
+          case '0':
+          case 'false':
+          case 'no':
+            return false;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// 日志只保留错误码或截断后的脱敏文本，不输出 Authorization / token。
+  static String _safeLogError(Object e) {
+    final redacted = e
+        .toString()
+        .replaceAllMapped(
+          RegExp(
+            r'(authorization|token|digest)(\s*[=:]\s*)[^,\s}]+',
+            caseSensitive: false,
+          ),
+          (m) => '${m[1]}=***',
+        )
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return redacted.length <= 160
+        ? redacted
+        : '${redacted.substring(0, 160)}...';
   }
 
   static String _columnLabel(Map<String, dynamic> column) {
@@ -2488,9 +2786,20 @@ class HuaweiAPI {
       '';
 
   static bool _isRecommendedLabel(String label) =>
-      label.contains('recom_exclusive') ||
-      label.contains('私享好歌') ||
-      label.contains('为你推荐');
+      label.contains('recom_exclusive');
+
+  /// 从 `page/detail/all` 的 columnInfoExs 找 recom_exclusive 栏目的真实号。
+  /// 8011 只是兜底常量，不在聚合页里强行覆盖动态栏目号。
+  static String? recommendedColumnIdFrom(dynamic root) {
+    for (final column in _findNamedList(root, 'columnInfoExs')) {
+      final id = _columnIdFrom(column);
+      if (id == null || id.isEmpty) continue;
+      if (id == featuredColumnId || _isRecommendedLabel(_columnLabel(column))) {
+        return id;
+      }
+    }
+    return null;
+  }
 
   static String? _columnIdFrom(Map<String, dynamic> column) {
     final maps = <Map<String, dynamic>>[];
@@ -2579,6 +2888,18 @@ class HuaweiAPI {
       }
     }
     return const <Map<String, dynamic>>[];
+  }
+
+  /// 只读 Map 的当前层字段，不递归子数组。
+  /// pmf001 的子批次（heart/new/hot）必须各自成批，不能让顶层
+  /// `listRcmInfos` 查询把第一个子批次的歌曲误当成自己的直接歌曲。
+  static List<Map<String, dynamic>> _directNamedList(
+    Map<String, dynamic> map,
+    String key,
+  ) {
+    final value = map[key];
+    if (value is! List) return const <Map<String, dynamic>>[];
+    return value.whereType<Map<String, dynamic>>().toList(growable: false);
   }
 
   /// Opt-in live probe helper: inspect a named list without reimplementing

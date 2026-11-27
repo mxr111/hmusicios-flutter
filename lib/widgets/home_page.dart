@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
-import '../models_skin.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
 
-/// 主页：顶部标题/音源/搜索 + 5 张推荐卡 + 「为你推荐」5 首/页 +
+/// 主页：顶部标题/华为音乐标识/搜索 + 5 张推荐卡 + 「为你推荐」5 首/页 +
 /// 底部「推荐歌单」网格。所有内容来自真实华为接口。
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.state});
@@ -21,7 +20,10 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _search = TextEditingController();
   int _recPage = 1;
   int _chartPage = 1;
-  int _cardGroup = 0;
+  int _cardPage = 1;
+
+  /// 首页卡片的本地预览分页：只按真实列表长度切当前预览歌，不发请求。
+  static const int _cardPreviewPageSize = 5;
 
   @override
   void dispose() {
@@ -41,111 +43,123 @@ class _HomePageState extends State<HomePage> {
     final charts = state.discover.charts;
     final chartCount = charts.isEmpty ? 1 : charts.length.clamp(1, 10);
     final chartPage = _chartPage.clamp(1, chartCount);
-    final cards = _cards(state);
+    final cardPageInfo = _cardPageInfo(state);
+    final cardPage = _cardPage.clamp(1, cardPageInfo.pageCount);
+    final cards = _cards(state, cardPage);
+    final hasHomeData =
+        cardPageInfo.hasData ||
+        songs.isNotEmpty ||
+        playlists.isNotEmpty ||
+        charts.isNotEmpty;
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 120),
-      children: [
-        _header(context, state),
-        const SizedBox(height: 16),
-        _heroCards(context, cards),
-        _cardGroupBar(),
-        const SizedBox(height: 24),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _sectionRow(
-                title: '为你推荐',
-                trailing: songs.isEmpty ? '暂无数据' : '$page/$pageCount',
-                onPrevious: page > 1
-                    ? () => setState(() => _recPage = page - 1)
-                    : null,
-                onNext: page < pageCount
-                    ? () => setState(() => _recPage = page + 1)
-                    : null,
-              ),
-              if (state.loading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: LinearProgressIndicator(minHeight: 2),
+    return SafeArea(
+      bottom: false,
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 120),
+        children: [
+          _header(context, state),
+          const SizedBox(height: 16),
+          _heroCards(context, cards),
+          _cardPageBar(cardPageInfo, cardPage, hasHomeData),
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sectionRow(
+                  title: '为你推荐',
+                  trailing: songs.isEmpty ? '暂无数据' : '第 $page / $pageCount 页',
+                  onTitleTap: () =>
+                      _openSectionPage(context, 'recommended', '为你推荐'),
+                  onPrevious: page > 1
+                      ? () => setState(() => _recPage = page - 1)
+                      : null,
+                  onNext: page < pageCount
+                      ? () => setState(() => _recPage = page + 1)
+                      : null,
                 ),
-              if (state.error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: StatePanel(
-                    message: state.error!,
+                if (state.loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: LinearProgressIndicator(minHeight: 2),
+                  ),
+                if (state.error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: StatePanel(
+                      message: state.error!,
+                      onRetry: () => state.refreshHome(force: true),
+                      actionLabel: '重试',
+                    ),
+                  ),
+                if (!state.isLoggedIn)
+                  const StatePanel(
+                    message: '尚未登录华为账号。请到「我的」扫码登录后加载真实曲库。',
+                  )
+                else if (!state.loading && songs.isEmpty)
+                  StatePanel(
+                    message: '为你推荐（8011）未返回歌曲。',
                     onRetry: () => state.refreshHome(force: true),
                     actionLabel: '重试',
-                  ),
-                ),
-              if (!state.isLoggedIn)
-                const StatePanel(message: '尚未登录华为账号。请到「我的」扫码登录后加载真实曲库。')
-              else if (!state.loading && songs.isEmpty)
-                StatePanel(
-                  message: '为你推荐（8011）未返回歌曲。',
-                  onRetry: () => state.refreshHome(force: true),
-                  actionLabel: '重试',
-                )
-              else
-                ...visibleSongs.map(
-                  (song) => SongRow(
-                    song: song,
-                    index: songs.indexOf(song),
-                    showTags: false,
-                    onPlay: () => playSongFromList(
-                      context,
-                      state,
-                      song,
-                      songs,
+                  )
+                else
+                  ...visibleSongs.map(
+                    (song) => SongRow(
+                      song: song,
+                      index: songs.indexOf(song),
+                      showTags: false,
+                      onPlay: () =>
+                          playSongFromList(context, state, song, songs),
+                      onFavorite: () => state.toggleFavorite(song),
+                      onArtistTap: () => state.openArtistFromSong(song),
                     ),
-                    onFavorite: () => state.toggleFavorite(song),
-                    onArtistTap: () => state.openArtistFromSong(song),
                   ),
+                const SizedBox(height: 26),
+                _sectionRow(
+                  title: '推荐歌单',
+                  trailing: playlists.isEmpty
+                      ? '暂无数据'
+                      : '共 ${playlists.length} 个',
+                  onTitleTap: () => _openCollectionPage(context, charts: false),
                 ),
-              const SizedBox(height: 26),
-              _sectionRow(
-                title: '推荐歌单',
-                trailing: playlists.isEmpty
-                    ? '暂无数据'
-                    : '共 ${playlists.length} 个',
-              ),
-              const SizedBox(height: 12),
-              if (playlists.isEmpty)
-                StatePanel(
-                  message: '暂无推荐歌单',
-                  onRetry: () => state.refreshHome(force: true),
-                  actionLabel: '重试',
-                )
-              else
-                _playlistStrip(context, playlists),
-              const SizedBox(height: 26),
-              _sectionRow(
-                title: '热歌榜',
-                trailing: charts.isEmpty
-                    ? '暂无数据'
-                    : '$chartPage/${charts.length > 10 ? 10 : charts.length}',
-                onPrevious: chartPage > 1
-                    ? () => setState(() => _chartPage = chartPage - 1)
-                    : null,
-                onNext: chartPage < chartCount
-                    ? () => setState(() => _chartPage = chartPage + 1)
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              if (charts.isEmpty)
-                StatePanel(
-                  message: '暂无榜单数据',
-                  onRetry: () => state.refreshHome(force: true),
-                  actionLabel: '重试',
-                )
-              else
-                _hotChartPanel(context, charts[chartPage - 1]),
-            ],
+                const SizedBox(height: 12),
+                if (playlists.isEmpty)
+                  StatePanel(
+                    message: '暂无推荐歌单',
+                    onRetry: () => state.refreshHome(force: true),
+                    actionLabel: '重试',
+                  )
+                else
+                  _playlistStrip(context, playlists),
+                const SizedBox(height: 26),
+                _sectionRow(
+                  title: '热歌榜',
+                  trailing: charts.isEmpty
+                      ? '暂无数据'
+                      : '第 $chartPage / $chartCount 页',
+                  onTitleTap: () => _openCollectionPage(context, charts: true),
+                  onPrevious: chartPage > 1
+                      ? () => setState(() => _chartPage = chartPage - 1)
+                      : null,
+                  onNext: chartPage < chartCount
+                      ? () => setState(() => _chartPage = chartPage + 1)
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                if (charts.isEmpty)
+                  StatePanel(
+                    message: '暂无榜单数据',
+                    onRetry: () => state.refreshHome(force: true),
+                    actionLabel: '重试',
+                  )
+                else
+                  _hotChartPanel(context, charts[chartPage - 1]),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -167,11 +181,13 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               const SizedBox(width: 16),
-              Flexible(child: SourceSwitcher(state: state)),
+              const SourceBadge(
+                key: ValueKey<String>('home-source-badge'),
+              ),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 20),
-                tooltip: '换一批',
+                tooltip: '刷新主页',
                 onPressed: state.refreshHome,
               ),
               OutlinedButton.icon(
@@ -236,21 +252,45 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.symmetric(horizontal: 24),
         itemCount: cards.length,
         separatorBuilder: (_, _) => const SizedBox(width: 16),
-        itemBuilder: (context, i) => HomeCard(
-          spec: cards[i],
-          onPlay: () => _playCard(context, cards[i].action),
-        ),
+        itemBuilder: (context, i) {
+          final card = cards[i];
+          // REA 证据：沐语「现在就听」点击卡片直接起播独立电台队列，
+          // 不先打开详情页；其余四张卡打开各自板块的分页详情。
+          final onTap = card.action == 'radio'
+              ? () => _playCard(context, card.action)
+              : () => _openSectionPage(context, card.action, card.title);
+          return HomeCard(
+            spec: card,
+            onTap: onTap,
+            onPlay: () => _playCard(context, card.action),
+          );
+        },
       ),
     );
   }
 
-  Widget _cardGroupBar() {
+  Widget _cardPageBar(_HomeCardPageInfo info, int page, bool hasHomeData) {
     final pal = widget.state.palette;
+    if (!hasHomeData) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 0),
+        child: StatePanel(
+          message: '首页推荐板块暂未返回数据。只有点击「重试」才会重新加载。',
+          onRetry: () => widget.state.refreshHome(force: true),
+          actionLabel: '重试',
+        ),
+      );
+    }
+    // 五张卡本身都没有预览歌时不显示页码；不要伪装出可切换的“页”。
+    if (!info.hasData) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 0),
       child: Row(
         children: [
-          Text('上一组 / 下一组', style: TextStyle(fontSize: 12, color: pal.muted)),
+          Text(
+            '第 $page / ${info.pageCount} 页',
+            style: TextStyle(fontSize: 12, color: pal.muted),
+          ),
           if (widget.state.loading)
             const Padding(
               padding: EdgeInsets.only(left: 8),
@@ -262,43 +302,89 @@ class _HomePageState extends State<HomePage> {
             ),
           const Spacer(),
           TextButton(
-            onPressed: () => _changeGroup(-1),
-            child: const Text('上一组'),
+            onPressed: page > 1 ? () => _changeCardPage(page - 1) : null,
+            child: const Text('上一页'),
           ),
           TextButton(
-            onPressed: () => _changeGroup(1),
-            child: const Text('下一组'),
+            onPressed: page < info.pageCount
+                ? () => _changeCardPage(page + 1)
+                : null,
+            child: const Text('下一页'),
           ),
         ],
       ),
     );
   }
 
-  /// 换组只切换已有本地分组；禁止在这里 force 刷新，避免请求风暴。
-  void _changeGroup(int delta) {
-    setState(() {
-      _cardGroup = (_cardGroup + delta) % 5;
-    });
+  /// 只切换本地页码；禁止在这里 force 刷新或发网络请求。
+  void _changeCardPage(int target) {
+    final pageCount = _cardPageInfo(widget.state).pageCount;
+    setState(() => _cardPage = target.clamp(1, pageCount));
+  }
+
+  /// 页码来自当前首页五张卡各自真实列表长度，而不是固定 `% 5`。
+  _HomeCardPageInfo _cardPageInfo(AppState state) {
+    final lengths = <int>[
+      state.discover.listen.length,
+      state.discover.daily.length,
+      state.discover.heart.length,
+      state.discover.newSongs.length,
+      state.discover.hot.length,
+    ];
+    var maxLength = 0;
+    for (final length in lengths) {
+      if (length > maxLength) maxLength = length;
+    }
+    if (maxLength == 0) {
+      return const _HomeCardPageInfo(pageCount: 1, hasData: false);
+    }
+    return _HomeCardPageInfo(
+      pageCount: (maxLength + _cardPreviewPageSize - 1) ~/
+          _cardPreviewPageSize,
+      hasData: true,
+    );
   }
 
   Widget _sectionRow({
     required String title,
     required String trailing,
+    VoidCallback? onTitleTap,
     VoidCallback? onPrevious,
     VoidCallback? onNext,
     String? nextTooltip,
   }) {
     final pal = widget.state.palette;
+    final titleWidget = Text(
+      title,
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+        color: pal.text,
+      ),
+    );
     return Row(
       children: [
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: pal.text,
+        if (onTitleTap == null)
+          titleWidget
+        else
+          Tooltip(
+            message: '分页查看全部',
+            child: InkWell(
+              onTap: onTitleTap,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    titleWidget,
+                    const SizedBox(width: 2),
+                    Icon(Icons.chevron_right, size: 17, color: pal.muted),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
         const Spacer(),
         Text(trailing, style: TextStyle(fontSize: 12, color: pal.muted)),
         if (onPrevious != null)
@@ -325,7 +411,7 @@ class _HomePageState extends State<HomePage> {
           return SizedBox(
             width: 132,
             child: InkWell(
-              onTap: () => _openPlaylist(context, playlist),
+              onTap: () => _openPlaylist(playlist),
               borderRadius: BorderRadius.circular(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -356,7 +442,7 @@ class _HomePageState extends State<HomePage> {
   Widget _hotChartPanel(BuildContext context, Playlist chart) {
     final pal = widget.state.palette;
     return InkWell(
-      onTap: () => _openChart(context, chart),
+      onTap: () => _openChart(chart),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(12),
@@ -397,16 +483,12 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _openPlaylist(BuildContext context, Playlist playlist) async {
+  Future<void> _openPlaylist(Playlist playlist) async {
     await widget.state.openPlaylist(playlist);
-    if (!context.mounted) return;
-    if (widget.state.playlistSongsList.isEmpty) {
-      _showMessage(context, '歌单「${playlist.name}」未返回歌曲，请重新登录或稍后重试');
-    }
   }
 
   /// 首页热歌榜必须按 chart 路径加载；不把榜单当普通收藏歌单请求。
-  Future<void> _openChart(BuildContext context, Playlist chart) async {
+  Future<void> _openChart(Playlist chart) async {
     final normalized = Playlist(
       id: chart.id,
       name: chart.name,
@@ -415,29 +497,49 @@ class _HomePageState extends State<HomePage> {
       kind: 'chart',
     );
     await widget.state.openPlaylist(normalized);
-    if (!context.mounted) return;
-    if (widget.state.playlistSongsList.isEmpty) {
-      _showMessage(context, '榜单「${chart.name}」未返回歌曲，请稍后重试');
-    }
   }
 
-  void _showMessage(BuildContext context, String message) {
+  void _openSectionPage(BuildContext context, String action, String title) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            HomeSectionPage(state: widget.state, action: action, title: title),
+      ),
+    );
+  }
+
+  void _openCollectionPage(BuildContext context, {required bool charts}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => HomeCollectionPage(state: widget.state, charts: charts),
+      ),
+    );
+  }
+
+  /// 卡片上的播放按钮：直接按独立队列起播，不打开详情页。
+  Future<void> _playCard(BuildContext context, String action) async {
+    final state = widget.state;
+    await state.playCard(action);
+    if (!context.mounted) return;
+    final message = state.error;
+    if (message == null || message.isEmpty || state.onError != null) return;
     ScaffoldMessenger.maybeOf(context)
       ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: Text('播放失败：$message')));
   }
 
   /// 五张卡分别绑定首页真实栏目：
   /// 现在就听（listen）/ 每日30首 / 心动模式 / 新歌推荐 / 热歌速递。
-  List<HomeCardSpec> _cards(AppState state) {
+  List<HomeCardSpec> _cards(AppState state, int page) {
     final discover = state.discover;
     final listen = discover.listen;
     final dailySongs = discover.daily;
     final newSongs = discover.newSongs;
     final heartSongs = discover.heart;
     final hotSongs = discover.hot;
+    final offset = (page - 1) * _cardPreviewPageSize;
     Song? pick(List<Song> list) =>
-        list.isEmpty ? null : list[_cardGroup % list.length];
+        list.isEmpty ? null : list[offset % list.length];
     final now = pick(listen);
     final dailySong = pick(dailySongs);
     final newSong = pick(newSongs);
@@ -529,171 +631,271 @@ class _HomePageState extends State<HomePage> {
     }
     return null;
   }
+}
 
-  Future<void> _playCard(BuildContext context, String action) async {
-    final state = widget.state;
-    List<Song> list;
-    switch (action) {
-      case 'radio':
-        list = state.discover.listen;
-        break;
-      case 'daily':
-        list = state.discover.daily;
-        break;
-      case 'hot':
-        list = state.discover.hot;
-        break;
-      case 'heart':
-        list = state.discover.heart;
-        break;
-      case 'new':
-        list = state.discover.newSongs;
-        break;
-      default:
-        return;
-    }
-    if (list.isEmpty) {
-      // 空卡片只提示，不自动 force 刷新；只有用户点「刷新/重试」才重载。
-      final label = _cardLabel(action);
-      state.error = '「$label」独立板块未返回歌曲（不回填其他列表）';
-      state.refresh();
-      if (!context.mounted) return;
-      _showMessage(context, state.error!);
-      return;
-    }
-    final index = _cardGroup % list.length;
-    if (!context.mounted) return;
-    await playSongFromList(context, state, list[index], list);
-  }
+class _HomeCardPageInfo {
+  const _HomeCardPageInfo({required this.pageCount, required this.hasData});
 
-  static String _cardLabel(String action) => switch (action) {
-    'radio' => '现在就听',
-    'daily' => '每日30首',
-    'heart' => '心动模式',
-    'new' => '新歌推荐',
-    'hot' => '热歌速递',
-    _ => action,
+  final int pageCount;
+  final bool hasData;
+}
+
+List<Song> _homeSectionSongs(AppState state, String action) {
+  return switch (action) {
+    'radio' => state.discover.listen,
+    'daily' => state.discover.daily,
+    'heart' => state.discover.heart,
+    'new' => state.discover.newSongs,
+    'hot' => state.discover.hot,
+    'recommended' => state.discover.recommended,
+    _ => const <Song>[],
   };
 }
 
-/// 顶部音源切换：华为 / 网易云 / 酷狗 / QQ 四个真实音源。
-class SourceSwitcher extends StatelessWidget {
-  const SourceSwitcher({super.key, required this.state});
+/// 首页 5 张卡 / 「为你推荐」的分页详情页。
+///
+/// 卡片点击只负责打开这一页，不再根据空数据直接弹提示；空板块显示空态
+/// 与显式重试按钮，重试才允许触发 [AppState.refreshHome]。
+class HomeSectionPage extends StatelessWidget {
+  const HomeSectionPage({
+    super.key,
+    required this.state,
+    required this.action,
+    required this.title,
+  });
+
   final AppState state;
+  final String action;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
-    final sources = <_SourceSpec>[
-      const _SourceSpec(
-        source: MusicSource.huawei,
-        label: '华为音乐',
-        icon: Icons.graphic_eq,
-        color: MuyuColors.accent,
-      ),
-      const _SourceSpec(
-        source: MusicSource.netease,
-        label: '网易云',
-        icon: Icons.cloud_queue,
-        color: Color(0xFFEF4444),
-      ),
-      const _SourceSpec(
-        source: MusicSource.kugou,
-        label: '酷狗',
-        icon: Icons.music_note,
-        color: Color(0xFF3B82F6),
-      ),
-      const _SourceSpec(
-        source: MusicSource.qq,
-        label: 'QQ',
-        icon: Icons.music_note,
-        color: Color(0xFFFACC15),
-      ),
-    ];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final item in sources) ...[
-            if (state.source == item.source)
-              _sourcePill(item)
-            else
-              _sourceDot(item),
-            const SizedBox(width: 8),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _sourcePill(_SourceSpec item) {
-    return GestureDetector(
-      onTap: () => state.switchSource(item.source),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: item.color.withValues(alpha: 0.16),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: item.color.withValues(alpha: 0.5)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(item.icon, size: 13, color: item.color),
-            const SizedBox(width: 5),
-            Text(
-              item.label,
-              style: TextStyle(
-                fontSize: 11,
-                color: item.color,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _sourceDot(_SourceSpec item) {
-    return Tooltip(
-      message: item.label,
-      child: GestureDetector(
-        onTap: () => state.switchSource(item.source),
-        child: Container(
-          width: 23,
-          height: 23,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: item.color.withValues(alpha: 0.14),
-            border: Border.all(color: item.color.withValues(alpha: 0.55)),
+    return AnimatedBuilder(
+      animation: state,
+      builder: (context, _) {
+        final songs = _homeSectionSongs(state, action);
+        return Scaffold(
+          backgroundColor: state.palette.base,
+          appBar: AppBar(
+            title: Text(title, style: TextStyle(color: state.palette.text)),
+            backgroundColor: Colors.transparent,
+            foregroundColor: state.palette.text,
+            elevation: 0,
           ),
-          child: Icon(item.icon, size: 13, color: item.color),
-        ),
-      ),
+          body: songs.isEmpty
+              ? ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                  children: [
+                    if (state.loading)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 10),
+                        child: LinearProgressIndicator(minHeight: 2),
+                      ),
+                    StatePanel(
+                      message: '「$title」独立板块暂未返回歌曲。其他推荐板块的数据不会被回填到这里。',
+                      onRetry: () => state.refreshHome(force: true),
+                      actionLabel: '重试',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '可以返回首页切换其他推荐板块；只有点击「重试」才会重新加载。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: state.palette.muted,
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                      child: Row(
+                        children: [
+                          Text(
+                            '${songs.length} 首 · 分页浏览',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: state.palette.muted,
+                            ),
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: () => playSongFromList(
+                              context,
+                              state,
+                              songs.first,
+                              songs,
+                            ),
+                            icon: const Icon(Icons.play_arrow, size: 18),
+                            label: const Text('播放全部'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: PaginatedSongList(
+                        songs: songs,
+                        resetKey: '$action:${songs.length}',
+                        onPlay: (song) =>
+                            playSongFromList(context, state, song, songs),
+                        onFavorite: state.toggleFavorite,
+                        onArtistTap: (song) => _openArtist(context, song),
+                      ),
+                    ),
+                  ],
+                ),
+        );
+      },
     );
+  }
+
+  /// 歌手详情是 AppShell 内的覆盖层；当前页是路由，先退出再打开，
+  /// 避免用户点了歌手却只更新了被路由遮住的下层页面。
+  void _openArtist(BuildContext context, Song song) {
+    Navigator.of(context).pop();
+    state.openArtistFromSong(song);
   }
 }
 
-class _SourceSpec {
-  const _SourceSpec({
-    required this.source,
-    required this.label,
-    required this.icon,
-    required this.color,
+/// 「推荐歌单 / 热歌榜」的分页集合页：从首页标题进入，点条目打开详情。
+class HomeCollectionPage extends StatelessWidget {
+  const HomeCollectionPage({
+    super.key,
+    required this.state,
+    required this.charts,
   });
 
-  final MusicSource source;
-  final String label;
-  final IconData icon;
-  final Color color;
+  final AppState state;
+  final bool charts;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = charts ? '热歌榜' : '推荐歌单';
+    return AnimatedBuilder(
+      animation: state,
+      builder: (context, _) {
+        final items = charts ? state.discover.charts : state.discover.playlists;
+        return Scaffold(
+          backgroundColor: state.palette.base,
+          appBar: AppBar(
+            title: Text(title, style: TextStyle(color: state.palette.text)),
+            backgroundColor: Colors.transparent,
+            foregroundColor: state.palette.text,
+            elevation: 0,
+          ),
+          body: items.isEmpty
+              ? ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                  children: [
+                    if (state.loading)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 10),
+                        child: LinearProgressIndicator(minHeight: 2),
+                      ),
+                    StatePanel(
+                      message: '「$title」暂未返回数据。只有点击「重试」才会重新加载。',
+                      onRetry: () => state.refreshHome(force: true),
+                      actionLabel: '重试',
+                    ),
+                  ],
+                )
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                      child: Row(
+                        children: [
+                          Text(
+                            charts
+                                ? '共 ${items.length} 个榜单'
+                                : '共 ${items.length} 个歌单',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: state.palette.muted,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '分页浏览',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: state.palette.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: PaginatedList<Playlist>(
+                        items: items,
+                        resetKey: charts ? 'charts' : 'playlists',
+                        separatorBuilder: (_, _) => Divider(
+                          height: 1,
+                          color: Theme.of(context).dividerColor,
+                        ),
+                        itemBuilder: (context, index, playlist) {
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            leading: CoverArt(
+                              url: playlist.cover,
+                              size: 46,
+                              seed: index,
+                            ),
+                            title: Text(
+                              playlist.name.isEmpty ? title : playlist.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: MuyuTheme.body,
+                            ),
+                            subtitle: Text(
+                              playlist.songCount > 0
+                                  ? '${playlist.songCount} 首'
+                                  : (charts ? '点击打开榜单' : '点击打开歌单'),
+                              style: MuyuTheme.muted,
+                            ),
+                            trailing: const Icon(Icons.chevron_right, size: 18),
+                            onTap: () => _openPlaylist(context, playlist),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+        );
+      },
+    );
+  }
+
+  void _openPlaylist(BuildContext context, Playlist playlist) {
+    final target = charts
+        ? Playlist(
+            id: playlist.id,
+            name: playlist.name,
+            cover: playlist.cover,
+            songCount: playlist.songCount,
+            kind: 'chart',
+          )
+        : playlist;
+    Navigator.of(context).pop();
+    state.openPlaylist(target);
+  }
 }
 
 /// 首页大卡片
 class HomeCard extends StatelessWidget {
-  const HomeCard({super.key, required this.spec, required this.onPlay});
+  const HomeCard({
+    super.key,
+    required this.spec,
+    required this.onTap,
+    required this.onPlay,
+  });
 
   final HomeCardSpec spec;
+  final VoidCallback onTap;
   final VoidCallback onPlay;
 
   @override
@@ -701,7 +903,7 @@ class HomeCard extends StatelessWidget {
     final lightText = spec.action != 'new';
     final fg = lightText ? Colors.white : const Color(0xFF2A2A30);
     return GestureDetector(
-      onTap: onPlay,
+      onTap: onTap,
       child: Container(
         width: MuyuDims.cardWidth,
         decoration: BoxDecoration(

@@ -6,6 +6,280 @@ import '../models.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 
+/// 明确分页条：只改本地页码，不发请求。
+///
+/// 标签文字固定为「第 x / y 页」，窄屏时用 [Wrap] 自动换行，避免按钮溢出。
+class PaginationBar extends StatelessWidget {
+  const PaginationBar({
+    super.key,
+    required this.page,
+    required this.pageCount,
+    required this.onPageChanged,
+    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+  });
+
+  final int page;
+  final int pageCount;
+  final ValueChanged<int> onPageChanged;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeCount = math.max(1, pageCount);
+    final safePage = page.clamp(1, safeCount);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
+
+    Widget pageButton(String label, int target, {bool enabled = true}) {
+      return TextButton(
+        onPressed: enabled && target != safePage
+            ? () => onPageChanged(target.clamp(1, safeCount))
+            : null,
+        style: TextButton.styleFrom(
+          minimumSize: const Size(0, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 7),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          foregroundColor: scheme.primary,
+          disabledForegroundColor: muted.withValues(alpha: 0.45),
+          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+        child: Text(label),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 2,
+        runSpacing: 2,
+        children: <Widget>[
+          pageButton('首页', 1, enabled: safePage > 1),
+          pageButton('上一页', safePage - 1, enabled: safePage > 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Text(
+              '第 $safePage / $safeCount 页',
+              key: const ValueKey<String>('pagination-page-label'),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: muted,
+              ),
+            ),
+          ),
+          pageButton('下一页', safePage + 1, enabled: safePage < safeCount),
+          pageButton('末页', safeCount, enabled: safePage < safeCount),
+        ],
+      ),
+    );
+  }
+}
+
+/// 每页只构建当前页的通用列表；点页码只改本地 state，不触发数据加载。
+///
+/// - 在 [Expanded] / 有界高度里使用默认 `shrinkWrap = false`，分页条固定在底部。
+/// - 嵌在外层 [ListView] 时传 `shrinkWrap: true`，由外层负责滚动。
+class PaginatedList<T> extends StatefulWidget {
+  const PaginatedList({
+    super.key,
+    required this.items,
+    required this.itemBuilder,
+    this.pageSize = 20,
+    this.shrinkWrap = false,
+    this.padding = EdgeInsets.zero,
+    this.separatorBuilder,
+    this.empty,
+    this.resetKey,
+    this.showPageBar = true,
+    this.physics,
+  }) : assert(pageSize > 0, 'pageSize must be positive');
+
+  final List<T> items;
+  final Widget Function(BuildContext context, int index, T item) itemBuilder;
+  final int pageSize;
+  final bool shrinkWrap;
+  final EdgeInsetsGeometry padding;
+  final IndexedWidgetBuilder? separatorBuilder;
+  final Widget? empty;
+  final Object? resetKey;
+  final bool showPageBar;
+  final ScrollPhysics? physics;
+
+  @override
+  State<PaginatedList<T>> createState() => _PaginatedListState<T>();
+}
+
+class _PaginatedListState<T> extends State<PaginatedList<T>> {
+  int _page = 1;
+
+  int get _pageCount => math.max(
+    1,
+    (widget.items.length + widget.pageSize - 1) ~/ widget.pageSize,
+  );
+
+  @override
+  void didUpdateWidget(covariant PaginatedList<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.resetKey != widget.resetKey) _page = 1;
+    _page = _page.clamp(1, _pageCount);
+  }
+
+  void _goToPage(int page) {
+    final next = page.clamp(1, _pageCount);
+    if (next == _page) return;
+    setState(() => _page = next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.items.isEmpty) {
+      return widget.empty ?? const SizedBox.shrink();
+    }
+
+    final pageCount = _pageCount;
+    final page = _page.clamp(1, pageCount);
+    final start = (page - 1) * widget.pageSize;
+    final end = math.min(start + widget.pageSize, widget.items.length);
+    final visible = widget.items.sublist(start, end);
+    final list = ListView.separated(
+      padding: widget.padding,
+      shrinkWrap: widget.shrinkWrap,
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : widget.physics,
+      itemCount: visible.length,
+      separatorBuilder:
+          widget.separatorBuilder ??
+          (BuildContext context, int index) => const SizedBox.shrink(),
+      itemBuilder: (context, i) =>
+          widget.itemBuilder(context, start + i, visible[i]),
+    );
+
+    return Column(
+      mainAxisSize: widget.shrinkWrap ? MainAxisSize.min : MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (widget.shrinkWrap) list else Expanded(child: list),
+        if (widget.showPageBar)
+          PaginationBar(
+            page: page,
+            pageCount: pageCount,
+            onPageChanged: _goToPage,
+          ),
+      ],
+    );
+  }
+}
+
+/// 每页只构建当前页的通用网格；分页条与 [PaginatedList] 共用。
+class PaginatedGrid<T> extends StatefulWidget {
+  const PaginatedGrid({
+    super.key,
+    required this.items,
+    required this.itemBuilder,
+    required this.crossAxisCount,
+    this.childAspectRatio = 1,
+    this.mainAxisSpacing = 12,
+    this.crossAxisSpacing = 12,
+    this.pageSize = 12,
+    this.shrinkWrap = false,
+    this.padding = EdgeInsets.zero,
+    this.empty,
+    this.resetKey,
+    this.showPageBar = true,
+    this.physics,
+  }) : assert(pageSize > 0, 'pageSize must be positive');
+
+  final List<T> items;
+  final Widget Function(BuildContext context, int index, T item) itemBuilder;
+  final int crossAxisCount;
+  final double childAspectRatio;
+  final double mainAxisSpacing;
+  final double crossAxisSpacing;
+  final int pageSize;
+  final bool shrinkWrap;
+  final EdgeInsetsGeometry padding;
+  final Widget? empty;
+  final Object? resetKey;
+  final bool showPageBar;
+  final ScrollPhysics? physics;
+
+  @override
+  State<PaginatedGrid<T>> createState() => _PaginatedGridState<T>();
+}
+
+class _PaginatedGridState<T> extends State<PaginatedGrid<T>> {
+  int _page = 1;
+
+  int get _pageCount => math.max(
+    1,
+    (widget.items.length + widget.pageSize - 1) ~/ widget.pageSize,
+  );
+
+  @override
+  void didUpdateWidget(covariant PaginatedGrid<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.resetKey != widget.resetKey) _page = 1;
+    _page = _page.clamp(1, _pageCount);
+  }
+
+  void _goToPage(int page) {
+    final next = page.clamp(1, _pageCount);
+    if (next == _page) return;
+    setState(() => _page = next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.items.isEmpty) {
+      return widget.empty ?? const SizedBox.shrink();
+    }
+
+    final pageCount = _pageCount;
+    final page = _page.clamp(1, pageCount);
+    final start = (page - 1) * widget.pageSize;
+    final end = math.min(start + widget.pageSize, widget.items.length);
+    final visible = widget.items.sublist(start, end);
+    final grid = GridView.builder(
+      padding: widget.padding,
+      shrinkWrap: widget.shrinkWrap,
+      physics: widget.shrinkWrap
+          ? const NeverScrollableScrollPhysics()
+          : widget.physics,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: math.max(1, widget.crossAxisCount),
+        childAspectRatio: widget.childAspectRatio,
+        mainAxisSpacing: widget.mainAxisSpacing,
+        crossAxisSpacing: widget.crossAxisSpacing,
+      ),
+      itemCount: visible.length,
+      itemBuilder: (context, i) =>
+          widget.itemBuilder(context, start + i, visible[i]),
+    );
+
+    return Column(
+      mainAxisSize: widget.shrinkWrap ? MainAxisSize.min : MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (widget.shrinkWrap) grid else Expanded(child: grid),
+        if (widget.showPageBar)
+          PaginationBar(
+            page: page,
+            pageCount: pageCount,
+            onPageChanged: _goToPage,
+          ),
+      ],
+    );
+  }
+}
+
 /// 封面：有 URL 走网络图，失败/无 URL 时用渐变占位（保证离线也有完整界面）。
 class CoverArt extends StatelessWidget {
   const CoverArt({
@@ -260,7 +534,9 @@ class QualityBadge extends StatelessWidget {
   }
 }
 
-/// 音源徽章：截图里「华为音乐」蓝色小圆标 + 文字
+/// 华为音乐徽章：截图里的蓝色小圆标 + 固定文案。
+///
+/// [label] 仅为兼容旧调用保留；UI 已收敛为华为音乐单音源，不再渲染其他平台。
 class SourceBadge extends StatelessWidget {
   const SourceBadge({super.key, this.label = '华为音乐', this.compact = false});
 
@@ -283,9 +559,9 @@ class SourceBadge extends StatelessWidget {
         ),
         if (!compact) ...[
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 10, color: MuyuColors.accent),
+          const Text(
+            '华为音乐',
+            style: TextStyle(fontSize: 10, color: MuyuColors.accent),
           ),
         ],
       ],
@@ -402,10 +678,10 @@ class SongRow extends StatelessWidget {
                     onTap: onArtistTap,
                     child: Row(
                       children: [
-                        Icon(
-                          song.source.icon,
+                        const Icon(
+                          Icons.graphic_eq,
                           size: 11,
-                          color: song.source.color,
+                          color: MuyuColors.accent,
                         ),
                         const SizedBox(width: 4),
                         Expanded(
@@ -454,6 +730,63 @@ class SongRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 歌曲列表分页封装：只渲染当前页，但 [onPlay] 由调用方传入完整歌曲队列。
+class PaginatedSongList extends StatelessWidget {
+  const PaginatedSongList({
+    super.key,
+    required this.songs,
+    required this.onPlay,
+    this.onFavorite,
+    this.onMore,
+    this.onArtistTap,
+    this.pageSize = 20,
+    this.shrinkWrap = false,
+    this.padding = EdgeInsets.zero,
+    this.separatorBuilder,
+    this.empty,
+    this.resetKey,
+    this.showPageBar = true,
+    this.showTags = true,
+  });
+
+  final List<Song> songs;
+  final ValueChanged<Song> onPlay;
+  final ValueChanged<Song>? onFavorite;
+  final ValueChanged<Song>? onMore;
+  final ValueChanged<Song>? onArtistTap;
+  final int pageSize;
+  final bool shrinkWrap;
+  final EdgeInsetsGeometry padding;
+  final IndexedWidgetBuilder? separatorBuilder;
+  final Widget? empty;
+  final Object? resetKey;
+  final bool showPageBar;
+  final bool showTags;
+
+  @override
+  Widget build(BuildContext context) {
+    return PaginatedList<Song>(
+      items: songs,
+      pageSize: pageSize,
+      shrinkWrap: shrinkWrap,
+      padding: padding,
+      separatorBuilder: separatorBuilder,
+      empty: empty,
+      resetKey: resetKey,
+      showPageBar: showPageBar,
+      itemBuilder: (context, index, song) => SongRow(
+        song: song,
+        index: index,
+        showTags: showTags,
+        onPlay: () => onPlay(song),
+        onFavorite: onFavorite == null ? null : () => onFavorite!(song),
+        onMore: onMore == null ? null : () => onMore!(song),
+        onArtistTap: onArtistTap == null ? null : () => onArtistTap!(song),
       ),
     );
   }

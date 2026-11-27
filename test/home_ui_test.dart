@@ -49,6 +49,20 @@ void main() {
     expect(find.textContaining('晴天'), findsWidgets);
     expect(find.textContaining('每日30首'), findsWidgets);
     expect(find.textContaining('热歌榜'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey<String>('home-source-badge')),
+      findsOneWidget,
+    );
+    expect(find.text('华为音乐'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString().contains('SourceSwitcher'),
+      ),
+      findsNothing,
+    );
+    for (final otherSource in const <String>['网易云', '酷狗', 'QQ', '切换音源']) {
+      expect(find.textContaining(otherSource), findsNothing);
+    }
 
     state.dispose();
   });
@@ -109,7 +123,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('1/6'), findsOneWidget);
+    expect(find.text('第 1 / 6 页'), findsOneWidget);
     expect(find.text('私享好歌0', skipOffstage: false), findsOneWidget);
     expect(find.text('私享好歌5', skipOffstage: false), findsNothing);
     state.dispose();
@@ -191,14 +205,16 @@ void main() {
     for (final text in subtitles) {
       expect(find.text(text), findsOneWidget);
     }
-    expect(find.text('1/5'), findsOneWidget);
-    expect(find.text('1/10'), findsOneWidget);
-    expect(find.text('上一组'), findsOneWidget);
-    expect(find.text('下一组'), findsOneWidget);
+    expect(find.text('第 1 / 5 页'), findsOneWidget);
+    expect(find.text('第 1 / 10 页'), findsOneWidget);
+    // 五张卡预览按真实列表长度分页（这里五块各 1 首，所以只有 1 页）。
+    expect(find.text('第 1 / 1 页'), findsOneWidget);
+    expect(find.text('上一页'), findsOneWidget);
+    expect(find.text('下一页'), findsOneWidget);
     state.dispose();
   });
 
-  testWidgets('点播放条进入全屏播放器，点歌词按钮进入歌词视图', (tester) async {
+  testWidgets('点播放条进入全屏播放器，点歌词按钮不退出播放器', (tester) async {
     final state = AppState();
     state.audio.current = Song(
       id: 's1',
@@ -217,11 +233,10 @@ void main() {
     await tester.tap(find.byType(VinylCover).first);
     await tester.pump(const Duration(milliseconds: 200));
     expect(state.showPlayer, isTrue);
-    expect(state.showLyrics, isFalse);
 
     await tester.tap(find.byIcon(Icons.lyrics_outlined));
     await tester.pump(const Duration(milliseconds: 200));
-    expect(state.showLyrics, isTrue);
+    expect(state.showPlayer, isTrue);
 
     state.closeFullPlayer();
     expect(state.showPlayer, isFalse);
@@ -316,7 +331,7 @@ void main() {
     state.dispose();
   });
 
-  testWidgets('首页 5 张卡 + 为你推荐使用各自独立队列，换组不触发请求', (tester) async {
+  testWidgets('首页 5 卡交互：现在就听直接起播，其余打开分页页并保留完整队列', (tester) async {
     final state = _RecordingState();
     state.api.gateway.session = MusicSession(
       token: 'ui-test-token',
@@ -348,22 +363,46 @@ void main() {
     );
     await tester.pump();
 
-    for (var i = 0; i < 5; i++) {
-      await tester.tap(find.byType(HomeCard).at(i));
-      await tester.pump();
-    }
-    expect(state.playedIds, <String>[
+    const cardSongs = <String>[
       'listen-1',
       'daily-1',
       'heart-1',
       'new-1',
       'hot-1',
-    ]);
-    expect(state.queues[0].map((s) => s.id), <String>['listen-1']);
-    expect(state.queues[1].map((s) => s.id), <String>['daily-1']);
-    expect(state.queues[2].map((s) => s.id), <String>['heart-1']);
-    expect(state.queues[3].map((s) => s.id), <String>['new-1']);
-    expect(state.queues[4].map((s) => s.id), <String>['hot-1']);
+    ];
+
+    // REA：现在就听点击卡片直接起播独立电台队列，不先打开空详情页。
+    await tester.tap(find.byType(HomeCard).at(0));
+    await tester.pump();
+    expect(state.cardActions, <String>['radio']);
+    expect(find.byType(HomeSectionPage), findsNothing);
+
+    // 其余四张卡点击卡片打开各自板块的分页详情。
+    for (var i = 1; i < cardSongs.length; i++) {
+      await tester.tap(find.byType(HomeCard).at(i));
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeSectionPage), findsOneWidget);
+      expect(find.text('播放全部'), findsOneWidget);
+      await tester.tap(find.text('曲-${cardSongs[i]}'));
+      await tester.pump();
+      expect(state.playedIds.last, cardSongs[i]);
+      expect(state.queues.last.single.id, cardSongs[i]);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+    }
+    expect(state.playedIds, cardSongs.skip(1).toList());
+
+    // 卡片上的播放按钮仍然直接调用 state.playCard(action)，不打开详情页。
+    state.cardActions.clear();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(HomeCard).at(2),
+        matching: find.byIcon(Icons.play_arrow),
+      ),
+    );
+    await tester.pump();
+    expect(state.cardActions, <String>['heart']);
+    expect(find.byType(HomeSectionPage), findsNothing);
 
     state.playedIds.clear();
     state.queues.clear();
@@ -371,11 +410,102 @@ void main() {
     await tester.pump();
     expect(state.playedIds, <String>['rec-1']);
     expect(state.queues.single.map((s) => s.id), <String>['rec-1', 'rec-2']);
+    state.dispose();
+  });
 
-    final before = state.refreshHomeCalls;
-    await tester.tap(find.text('下一组'));
+  testWidgets('首页标题打开为你推荐/推荐歌单/热歌榜分页页', (tester) async {
+    final state = _RecordingState();
+    state.discover = DiscoverData(
+      recommended: List<Song>.generate(
+        3,
+        (i) => Song(id: 'rec-$i', name: '推荐歌$i', artists: const <String>['A']),
+      ),
+      playlists: const <Playlist>[
+        Playlist(id: 'pl-1', name: '歌单甲', kind: 'collected'),
+      ],
+      charts: const <Playlist>[
+        Playlist(id: '24926', name: '榜单甲', kind: 'chart'),
+      ],
+    );
+    await tester.binding.setSurfaceSize(const Size(1460, 1100));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
     await tester.pump();
-    expect(state.refreshHomeCalls, before);
+
+    await tester.tap(find.text('为你推荐'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeSectionPage), findsOneWidget);
+    expect(find.text('推荐歌0'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('推荐歌单'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeCollectionPage), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('热歌榜'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeCollectionPage), findsOneWidget);
+    state.dispose();
+  });
+
+  testWidgets('首页所有板块为空时显示显式重试，不自动强刷', (tester) async {
+    final state = _RecordingState();
+    state.discover = const DiscoverData();
+    await tester.binding.setSurfaceSize(const Size(1460, 1100));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    const emptyMessage = '首页推荐板块暂未返回数据。只有点击「重试」才会重新加载。';
+    final panel = find.widgetWithText(StatePanel, emptyMessage);
+    expect(panel, findsOneWidget);
+    expect(state.refreshHomeCalls, 0);
+    expect(find.textContaining('第 1 /'), findsNothing);
+
+    await tester.tap(find.descendant(of: panel, matching: find.text('重试')));
+    await tester.pump();
+    expect(state.refreshHomeCalls, 1);
+    state.dispose();
+  });
+
+  testWidgets('首页上一页/下一页只改本地预览，不触发刷新请求', (tester) async {
+    final state = _RecordingState();
+    state.discover = DiscoverData(
+      listen: List<Song>.generate(
+        11,
+        (i) => Song(id: 'listen-$i', name: '现在就听$i', artists: const <String>['A']),
+      ),
+    );
+    await tester.binding.setSurfaceSize(const Size(1460, 1100));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MuyuTheme.light(),
+        home: Scaffold(body: HomePage(state: state)),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('第 1 / 3 页'), findsOneWidget);
+    expect(find.text('现在就听0 · A'), findsOneWidget);
+    final refreshBefore = state.refreshHomeCalls;
+
+    await tester.tap(find.text('下一页'));
+    await tester.pump();
+    expect(find.text('第 2 / 3 页'), findsOneWidget);
+    expect(find.text('现在就听5 · A'), findsOneWidget);
+    expect(state.refreshHomeCalls, refreshBefore);
+    expect(state.cardActions, isEmpty);
     state.dispose();
   });
 
@@ -397,10 +527,10 @@ void main() {
     await tester.tap(find.text('搜索结果一'));
     await tester.pump();
     expect(state.playedIds, <String>['search-1']);
-    expect(
-      state.queues.single.map((s) => s.id),
-      <String>['search-1', 'search-2'],
-    );
+    expect(state.queues.single.map((s) => s.id), <String>[
+      'search-1',
+      'search-2',
+    ]);
     state.dispose();
   });
 
@@ -427,14 +557,20 @@ void main() {
     await tester.tap(find.text('榜单歌1'));
     await tester.pump();
     expect(state.playedIds, <String>['chart-1']);
-    expect(state.queues.single.map((s) => s.id), <String>['chart-1', 'chart-2']);
+    expect(state.queues.single.map((s) => s.id), <String>[
+      'chart-1',
+      'chart-2',
+    ]);
 
     state.playedIds.clear();
     state.queues.clear();
     await tester.tap(find.text('播放全部'));
     await tester.pump();
     expect(state.playedIds, <String>['chart-1']);
-    expect(state.queues.single.map((s) => s.id), <String>['chart-1', 'chart-2']);
+    expect(state.queues.single.map((s) => s.id), <String>[
+      'chart-1',
+      'chart-2',
+    ]);
     state.dispose();
   });
 }
@@ -442,12 +578,19 @@ void main() {
 class _RecordingState extends AppState {
   final List<String> playedIds = <String>[];
   final List<List<Song>> queues = <List<Song>>[];
+  final List<String> cardActions = <String>[];
   int refreshHomeCalls = 0;
 
   @override
   Future<void> play(Song song, {List<Song>? queue}) async {
     playedIds.add(song.id);
     queues.add(List<Song>.of(queue ?? <Song>[song]));
+    refresh();
+  }
+
+  @override
+  Future<void> playCard(String action) async {
+    cardActions.add(action);
     refresh();
   }
 

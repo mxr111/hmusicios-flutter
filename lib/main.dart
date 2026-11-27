@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
 
-import 'models_skin.dart';
 import 'pages/secondary_pages.dart';
 import 'services/app_state.dart';
-import 'widgets/netease_login_sheet.dart';
 import 'theme.dart';
 import 'widgets/home_page.dart';
-import 'widgets/kugou_login_sheet.dart';
-import 'widgets/netease_home_page.dart';
+import 'widgets/oauth_webview_page.dart';
 import 'widgets/player_bar.dart';
-import 'widgets/qq_login_sheet.dart';
 import 'widgets/sidebar.dart';
 
 void main() {
@@ -28,6 +24,8 @@ class _MuyuAppState extends State<MuyuApp> {
   final AppState _state = AppState();
   final GlobalKey<ScaffoldMessengerState> _messengerKey =
       GlobalKey<ScaffoldMessengerState>();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  bool _reloginInFlight = false;
 
   @override
   void initState() {
@@ -42,6 +40,7 @@ class _MuyuAppState extends State<MuyuApp> {
         );
       });
     };
+    _state.addListener(_onStateChanged);
     _bootstrap();
   }
 
@@ -52,13 +51,45 @@ class _MuyuAppState extends State<MuyuApp> {
     } catch (_) {
       // 本地会话损坏时按未登录启动，不阻塞界面。
     }
+    if (!mounted) return;
+    _state.startSessionKeepAlive();
+    _maybeAutoRelogin();
     if (!mounted || !_state.isLoggedIn) return;
     await _state.loadHome();
     await _state.loadLibrary();
   }
 
+  void _onStateChanged() {
+    if (_state.needsRelogin) _maybeAutoRelogin();
+  }
+
+  void _maybeAutoRelogin() {
+    if (!mounted ||
+        _reloginInFlight ||
+        !_state.needsRelogin ||
+        _state.savedHuaweiCredentials == null) {
+      return;
+    }
+    _reloginInFlight = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_state.needsRelogin) {
+        _reloginInFlight = false;
+        return;
+      }
+      _state.clearReloginRequest();
+      try {
+        await _navigatorKey.currentState?.push<bool>(
+          huaweiOAuthRoute(_state, autoFillCredentials: true),
+        );
+      } finally {
+        _reloginInFlight = false;
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _state.removeListener(_onStateChanged);
     _state.dispose();
     super.dispose();
   }
@@ -70,6 +101,7 @@ class _MuyuAppState extends State<MuyuApp> {
       builder: (context, _) => MaterialApp(
         title: 'Hmusic',
         scaffoldMessengerKey: _messengerKey,
+        navigatorKey: _navigatorKey,
         debugShowCheckedModeBanner: false,
         theme: MuyuTheme.light(),
         darkTheme: MuyuTheme.dark(),
@@ -164,9 +196,7 @@ class AppShell extends StatelessWidget {
   Widget _page(BuildContext context) {
     switch (state.tab) {
       case 0:
-        return state.source == MusicSource.netease
-            ? NeteaseHomePage(state: state)
-            : HomePage(state: state);
+        return HomePage(state: state);
       case 1:
         return SearchPage(state: state);
       case 2:
@@ -181,9 +211,7 @@ class AppShell extends StatelessWidget {
           onLocalMusic: () => _openLocalMusic(context),
         );
       default:
-        return state.source == MusicSource.netease
-            ? NeteaseHomePage(state: state)
-            : HomePage(state: state);
+        return HomePage(state: state);
     }
   }
 
@@ -194,20 +222,18 @@ class AppShell extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => switch (state.source) {
-        MusicSource.netease => NeteaseLoginSheet(state: state),
-        MusicSource.kugou => KugouLoginSheet(state: state),
-        MusicSource.qq => QqLoginSheet(state: state),
-        MusicSource.huawei => LoginSheet(state: state),
-      },
+      builder: (_) => LoginSheet(state: state),
     );
   }
 
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            SettingsPage(state: state, onLogin: () => _login(context)),
+        builder: (_) => AnimatedBuilder(
+          animation: state,
+          builder: (_, _) =>
+              SettingsPage(state: state, onLogin: () => _login(context)),
+        ),
       ),
     );
   }

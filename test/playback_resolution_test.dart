@@ -98,6 +98,14 @@ class _FakeAudio extends MuyuAudioController {
 
   @override
   Future<void> playSong(Song song, {List<Song>? list}) async {
+    if (list != null && list.isNotEmpty) {
+      queue = List<Song>.of(list);
+      index = queue.indexWhere((item) => item.id == song.id);
+      if (index < 0) {
+        queue.insert(0, song);
+        index = 0;
+      }
+    }
     played.add(song.id);
     current = song;
     error = song.id == 'vip-only'
@@ -115,6 +123,14 @@ class _ApiBackedAudio extends MuyuAudioController {
 
   @override
   Future<void> playSong(Song song, {List<Song>? list}) async {
+    if (list != null && list.isNotEmpty) {
+      queue = List<Song>.of(list);
+      index = queue.indexWhere((item) => item.id == song.id);
+      if (index < 0) {
+        queue.insert(0, song);
+        index = 0;
+      }
+    }
     played.add(song.id);
     current = song;
     try {
@@ -166,6 +182,24 @@ void main() {
       isTrue,
     );
     expect(AppState.looksUnplayable('网络请求失败：timeout'), isFalse);
+  });
+
+  test('普通点歌会清空电台续播回调，避免歌单尾部误续私人电台', () async {
+    final api = _SkipApi();
+    final audio = _FakeAudio(api);
+    final state = AppState(
+      sessionStore: MemorySessionStore(),
+      huaweiApi: api,
+      audioController: audio,
+    );
+    audio.onQueueExhausted = () async => <Song>[];
+    final song = Song(id: 'normal', name: '普通歌曲');
+
+    await state.play(song, queue: <Song>[song]);
+
+    expect(audio.onQueueExhausted, isNull);
+    expect(state.error, isNull);
+    state.dispose();
   });
 
   test('真 VIP 全档失败时 play 自动尝试队列下一首', () async {

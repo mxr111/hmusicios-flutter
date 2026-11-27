@@ -40,119 +40,134 @@ class PlayerBar extends StatelessWidget {
       child: Container(
         height: MuyuDims.playerBarHeight,
         decoration: BoxDecoration(
-        color: pal.surface,
-        borderRadius: BorderRadius.circular(36),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
+          color: pal.surface,
+          borderRadius: BorderRadius.circular(36),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
         child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth > 820;
-          final compact = constraints.maxWidth < 520;
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                VinylCover(url: song.cover, size: 46, spinning: audio.playing),
-                const SizedBox(width: 10),
-                SizedBox(
-                  width: compact ? 100 : (wide ? 150 : 110),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(song.name,
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth > 820;
+            final compact = constraints.maxWidth < 520;
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  VinylCover(
+                    url: song.cover,
+                    size: 46,
+                    spinning: audio.playing,
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: compact ? 100 : (wide ? 150 : 110),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          song.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: pal.text)),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(song.artistText,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: pal.text,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                song.artistText,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style:
-                                    TextStyle(fontSize: 12, color: pal.muted)),
-                          ),
-                          if (!compact) ...[
-                            const SizedBox(width: 6),
-                            const SourceBadge(compact: true),
-                            const SizedBox(width: 5),
-                            QualityBadge(audio.quality, small: true),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                if (wide) ...[
-                  const SizedBox(width: 12),
-                  _controls(audio),
-                ],
-                const SizedBox(width: 8),
-                if (!compact)
-                  Expanded(
-                    child: ValueListenableBuilder<Duration>(
-                      valueListenable: audio.positionNotifier,
-                      builder: (context, value, _) {
-                        final seconds = hasTrack
-                            ? value.inSeconds.toDouble().clamp(0.0, total)
-                            : currentSeconds;
-                        return Row(
-                          children: [
-                            Text(_fmt(seconds),
                                 style: TextStyle(
-                                    fontSize: 12, color: pal.muted)),
-                            Expanded(
-                              child: Slider(
-                                value: seconds,
-                                min: 0,
-                                max: total,
-                                activeColor: MuyuColors.primary,
-                                inactiveColor: MuyuColors.divider,
-                                onChanged: (v) =>
-                                    audio.seek(Duration(seconds: v.toInt())),
+                                  fontSize: 12,
+                                  color: pal.muted,
+                                ),
                               ),
                             ),
-                            Text(
-                              hasTrack && audio.duration.inSeconds > 0
-                                  ? _fmt(total)
-                                  : '0:00',
-                              style: TextStyle(fontSize: 12, color: pal.muted),
-                            ),
+                            if (!compact) ...[
+                              const SizedBox(width: 6),
+                              const SourceBadge(compact: true),
+                              const SizedBox(width: 5),
+                              QualityBadge(audio.quality, small: true),
+                            ],
                           ],
-                        );
-                      },
+                        ),
+                      ],
                     ),
                   ),
-                if (compact) const Spacer(),
-                if (wide) ..._rightButtons(context, song),
-                if (!wide) ...[
-                  TinyIconButton(
-                    icon: audio.playing ? Icons.pause : Icons.play_arrow,
-                    onTap: _togglePlayback,
-                    size: 24,
-                    color: MuyuColors.ink,
-                  ),
-                  TinyIconButton(
-                    icon: Icons.skip_next,
-                    onTap: audio.next,
-                    size: 20,
-                  ),
+                  if (wide) ...[const SizedBox(width: 12), _controls(audio)],
+                  const SizedBox(width: 8),
+                  if (!compact)
+                    Expanded(
+                      child: ValueListenableBuilder<Duration>(
+                        valueListenable: audio.positionNotifier,
+                        builder: (context, value, _) {
+                          final seconds = hasTrack
+                              ? value.inSeconds.toDouble().clamp(0.0, total)
+                              : currentSeconds;
+                          return Row(
+                            children: [
+                              Text(
+                                _fmt(seconds),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: pal.muted,
+                                ),
+                              ),
+                              Expanded(
+                                child: Slider(
+                                  value: seconds,
+                                  min: 0,
+                                  max: total,
+                                  activeColor: MuyuColors.primary,
+                                  inactiveColor: MuyuColors.divider,
+                                  onChanged: (v) =>
+                                      audio.seek(Duration(seconds: v.toInt())),
+                                ),
+                              ),
+                              Text(
+                                hasTrack && audio.duration.inSeconds > 0
+                                    ? _fmt(total)
+                                    : '0:00',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: pal.muted,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  if (compact) const Spacer(),
+                  if (wide) ..._rightButtons(context, song),
+                  if (!wide) ...[
+                    TinyIconButton(
+                      icon: audio.playing ? Icons.pause : Icons.play_arrow,
+                      onTap: _togglePlayback,
+                      size: 24,
+                      color: MuyuColors.ink,
+                    ),
+                    TinyIconButton(
+                      icon: Icons.skip_next,
+                      onTap: audio.next,
+                      size: 20,
+                    ),
+                  ],
                 ],
-              ],
-            ),
-          );
-        },
+              ),
+            );
+          },
         ),
       ),
     );
@@ -169,7 +184,11 @@ class PlayerBar extends StatelessWidget {
           size: 16,
           tooltip: '播放模式：${audio.playMode.label}',
         ),
-        TinyIconButton(icon: Icons.skip_previous, onTap: audio.previous, size: 20),
+        TinyIconButton(
+          icon: Icons.skip_previous,
+          onTap: audio.previous,
+          size: 20,
+        ),
         const SizedBox(width: 4),
         GestureDetector(
           onTap: _togglePlayback,
@@ -201,14 +220,13 @@ class PlayerBar extends StatelessWidget {
     }
   }
 
-  /// 播放条空白/封面：进入应用级全屏播放器，保留当前 playerStyle。
+  /// 播放条空白/封面：进入应用级全屏播放器，默认显示封面页。
   void _openFullPlayer(Song song) {
     if (state.immersiveFullscreen) state.toggleImmersiveFullscreen();
     state.openFullPlayer(song);
   }
 
-  /// 歌词按钮 = 歌词放大：同一播放器全屏沉浸，只保留当前样式与歌词，
-  /// 不换皮肤、不加载另一个独立歌词页。
+  /// 歌词按钮 = 歌词放大：打开同一播放器，是否进入歌词页由用户点封面/滑动。
   void _openLyrics(Song song) {
     state.showLyricsFor(song);
     if (!state.immersiveFullscreen) state.toggleImmersiveFullscreen();
@@ -240,7 +258,7 @@ class PlayerBar extends StatelessWidget {
       ),
       TinyIconButton(
         icon: audio.volume == 0 ? Icons.volume_off : Icons.volume_up,
-        onTap: () => _showVolume(context, audio),
+        onTap: () => _showVolume(context),
         tooltip: '音量',
       ),
       TinyIconButton(
@@ -261,36 +279,40 @@ class PlayerBar extends StatelessWidget {
     ];
   }
 
-  void _showVolume(BuildContext context, MuyuAudioController audio) {
+  void _showVolume(BuildContext context) {
     showDialog<void>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('音量'),
-        content: StatefulBuilder(
-          builder: (context, setDlg) => Row(
-            children: [
-              IconButton(
-                icon: Icon(audio.volume == 0 ? Icons.volume_off : Icons.volume_up),
-                onPressed: () async {
-                  await audio.setVolume(audio.volume == 0 ? 1.0 : 0.0);
-                  setDlg(() {});
-                },
-              ),
-              Expanded(
-                child: Slider(
-                  value: audio.volume,
-                  onChanged: (v) async {
-                    await audio.setVolume(v);
-                    setDlg(() {});
-                  },
+        content: AnimatedBuilder(
+          animation: state.audio,
+          builder: (context, _) {
+            final audio = state.audio;
+            final muted = audio.volume == 0;
+            return Row(
+              children: [
+                IconButton(
+                  tooltip: muted ? '取消静音' : '静音',
+                  icon: Icon(muted ? Icons.volume_off : Icons.volume_up),
+                  onPressed: () => state.setVolume(muted ? 1.0 : 0.0),
                 ),
-              ),
-              Text('${(audio.volume * 100).round()}%'),
-            ],
-          ),
+                Expanded(
+                  child: Slider(
+                    key: const ValueKey<String>('player-bar-volume-slider'),
+                    value: audio.volume.clamp(0.0, 1.0),
+                    onChanged: (v) => state.setVolume(v),
+                  ),
+                ),
+                Text('${(audio.volume * 100).round()}%'),
+              ],
+            );
+          },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
         ],
       ),
     );
@@ -313,17 +335,23 @@ class PlayerBar extends StatelessWidget {
                 padding: EdgeInsets.all(18),
                 child: Text('暂无歌单，请先在「唱片架」创建', style: MuyuTheme.muted),
               ),
-            ...playlists.where((p) => p.kind == 'owned').map(
-              (p) => ListTile(
-                dense: true,
-                leading: const Icon(Icons.playlist_add),
-                title: Text(p.name),
-                onTap: () async {
-                  await state.api.changeCollectionSong(p.id, song.id, add: true);
-                  if (context.mounted) Navigator.pop(context);
-                },
-              ),
-            ),
+            ...playlists
+                .where((p) => p.kind == 'owned')
+                .map(
+                  (p) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.playlist_add),
+                    title: Text(p.name),
+                    onTap: () async {
+                      await state.api.changeCollectionSong(
+                        p.id,
+                        song.id,
+                        add: true,
+                      );
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                ),
             const SizedBox(height: 12),
           ],
         ),
@@ -351,9 +379,11 @@ class PlayerBar extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.timer),
               title: const Text('定时停止'),
-              subtitle: Text(audio.sleepTimer == null
-                  ? '未设置'
-                  : '剩余 ${audio.sleepRemaining?.inMinutes ?? 0} 分钟'),
+              subtitle: Text(
+                audio.sleepTimer == null
+                    ? '未设置'
+                    : '剩余 ${audio.sleepRemaining?.inMinutes ?? 0} 分钟',
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _showSleepTimer(context, audio);
@@ -403,18 +433,10 @@ class PlayerBar extends StatelessWidget {
                     ? const Icon(Icons.check, color: MuyuColors.accent)
                     : null,
                 onTap: () {
-                  audio.setEffect(e);
+                  state.setEffect(e);
                   Navigator.pop(context);
                 },
               ),
-            ),
-            ListTile(
-              dense: true,
-              title: const Text('关闭音效（原声）'),
-              onTap: () {
-                audio.setEffect('');
-                Navigator.pop(context);
-              },
             ),
           ],
         ),
@@ -476,7 +498,7 @@ class PlayerBar extends StatelessWidget {
                     ? const Icon(Icons.check, color: MuyuColors.accent)
                     : null,
                 onTap: () {
-                  audio.setQuality(q);
+                  state.setQuality(q);
                   Navigator.pop(context);
                 },
               ),
@@ -514,9 +536,13 @@ class PlayerBar extends StatelessWidget {
                       final c = state.comments[i];
                       return ListTile(
                         dense: true,
-                        title: Text(c.author,
-                            style: const TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w600)),
+                        title: Text(
+                          c.author,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                         subtitle: Text(c.content),
                         trailing: Text('${c.likes}', style: MuyuTheme.muted),
                       );
@@ -535,31 +561,35 @@ class PlayerBar extends StatelessWidget {
     final queue = state.audio.queue;
     showModalBottomSheet<void>(
       context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(14),
-              child: Text('播放队列', style: MuyuTheme.section),
-            ),
-            if (queue.isEmpty)
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.7,
+          child: Column(
+            children: [
               const Padding(
-                padding: EdgeInsets.all(18),
-                child: Text('队列为空', style: MuyuTheme.muted),
+                padding: EdgeInsets.all(14),
+                child: Text('播放队列', style: MuyuTheme.section),
               ),
-            ...queue.map((s) => ListTile(
-                  dense: true,
-                  leading: CoverArt(url: s.cover, size: 36, seed: 1),
-                  title: Text(s.name, style: const TextStyle(fontSize: 13)),
-                  subtitle: Text(s.artistText, style: MuyuTheme.muted),
-                  onTap: () {
-                    Navigator.pop(context);
-                    state.play(s, queue: queue);
-                  },
-                )),
-            const SizedBox(height: 12),
-          ],
+              if (queue.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(18),
+                  child: Text('队列为空', style: MuyuTheme.muted),
+                )
+              else
+                Expanded(
+                  child: PaginatedSongList(
+                    songs: queue,
+                    resetKey: queue.length,
+                    onPlay: (song) {
+                      Navigator.pop(sheetContext);
+                      state.play(song, queue: queue);
+                    },
+                    onFavorite: state.toggleFavorite,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -570,4 +600,3 @@ class PlayerBar extends StatelessWidget {
     return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
   }
 }
-

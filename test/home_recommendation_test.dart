@@ -225,7 +225,7 @@ void main() {
 
     expect(gateway.exchangeCalls, 1);
     expect(api.isLoggedIn, isFalse);
-    expect(state.error, contains('重新扫码登录'));
+    expect(state.error, contains('重新完成华为 OAuth 验证'));
     state.dispose();
   });
 }

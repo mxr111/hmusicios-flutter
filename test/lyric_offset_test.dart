@@ -9,23 +9,38 @@ import 'package:muyu_flutter/widgets/immersive_player.dart';
 void main() {
   testWidgets('歌词偏移可按 100ms 正负校准', (tester) async {
     final audio = MuyuAudioController(HuaweiAPI());
+    expect(audio.lyricRevision.value, 0);
+    expect(audio.settingsRevision.value, 0);
+
     audio.adjustLyricOffset(const Duration(milliseconds: 100));
     expect(audio.lyricOffset, const Duration(milliseconds: 100));
+    expect(audio.lyricRevision.value, 1);
+    expect(audio.settingsRevision.value, 1);
 
     audio.adjustLyricOffset(const Duration(milliseconds: -200));
     expect(audio.lyricOffset, const Duration(milliseconds: -100));
+    expect(audio.lyricRevision.value, 2);
+    expect(audio.settingsRevision.value, 2);
     audio.dispose();
     await tester.pump();
   });
 
-  testWidgets('歌词偏移限制在正负 5 秒', (tester) async {
+  testWidgets('setLyricOffset 限制在正负 5 秒并递增两个 revision', (tester) async {
     final audio = MuyuAudioController(HuaweiAPI());
-    audio.adjustLyricOffset(const Duration(seconds: 6));
+    await audio.setLyricOffset(const Duration(seconds: 6));
     expect(audio.lyricOffset, const Duration(seconds: 5));
+    expect(audio.lyricRevision.value, 1);
+    expect(audio.settingsRevision.value, 1);
 
-    audio.resetLyricOffset();
-    audio.adjustLyricOffset(const Duration(seconds: -6));
+    await audio.resetLyricOffset();
+    expect(audio.lyricOffset, Duration.zero);
+    expect(audio.lyricRevision.value, 2);
+    expect(audio.settingsRevision.value, 2);
+
+    await audio.setLyricOffset(const Duration(seconds: -6));
     expect(audio.lyricOffset, const Duration(seconds: -5));
+    expect(audio.lyricRevision.value, 3);
+    expect(audio.settingsRevision.value, 3);
     audio.dispose();
     await tester.pump();
   });

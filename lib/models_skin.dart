@@ -11,14 +11,10 @@ enum MusicSource {
   final String label;
 }
 
-/// 播放器样式（沐语 4 种，REA 文案实测：新版播放器/经典播放器/封面沉浸/简洁播放器）。
-/// 源码：native_vinyl_player.go / native_folia_player.go / native_minimal_player.go /
-/// native_immersive_lyrics.go；「新增封面沉浸样式，可从歌词页底部栏打开缩略图面板切换」。
+/// 播放器样式。全屏播放器已收敛为单一经典布局；保留枚举与字段形状，
+/// 让设置持久化和旧调用方无需因皮肤减少而改造。
 enum PlayerStyle {
-  modern('新版播放器', '黑胶旋转 · 几何艺术字'),
-  classic('经典播放器', '传统封面 + 歌词列表'),
-  cover('封面沉浸', '大图铺底 · 歌词悬浮'),
-  minimal('简洁播放器', '极简控件');
+  classic('经典播放器', '传统封面 + 歌词列表');
 
   const PlayerStyle(this.label, this.desc);
   final String label;
@@ -66,9 +62,7 @@ class LyricStyle {
 }
 
 /// 内置字体（REA：「全局、播放器歌词和桌面歌词默认使用鸿蒙黑体」「主歌词与桌面歌词分别支持内置字体选择」）。
-const List<String> kBuiltinFonts = <String>[
-  '鸿蒙黑体', '系统默认', '思源黑体', '宋体', '楷体',
-];
+const List<String> kBuiltinFonts = <String>['鸿蒙黑体', '系统默认', '思源黑体', '宋体', '楷体'];
 
 /// 沉浸光感档位（REA：「原毛玻璃设置迁移为沉浸光感的超厚档」，
 /// 「独立设置按压形变、滑动光效、光感颜色和超薄」）。

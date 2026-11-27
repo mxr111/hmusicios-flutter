@@ -1,3 +1,5 @@
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muyu_flutter/models.dart';
 import 'package:muyu_flutter/protocol/endpoints.dart';
@@ -5,6 +7,38 @@ import 'package:muyu_flutter/protocol/huawei_api.dart';
 import 'package:muyu_flutter/protocol/huawei_gateway.dart';
 import 'package:muyu_flutter/services/app_log.dart';
 import 'package:muyu_flutter/services/audio_controller.dart';
+
+class _DecodeFailPlayer extends AudioPlayer {
+  @override
+  Future<void> play(
+    Source source, {
+    double? volume,
+    double? balance,
+    AudioContext? ctx,
+    Duration? position,
+    PlayerMode? mode,
+  }) async {
+    throw StateError('decode failed');
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> pause() async {}
+
+  @override
+  Future<void> resume() async {}
+
+  @override
+  Future<void> seek(Duration position) async {}
+
+  @override
+  Future<void> dispose() async {}
+}
 
 class _PlaybackGateway extends HuaweiGateway {
   _PlaybackGateway({this.allAudition = false});
@@ -136,6 +170,29 @@ class _ThrowingAuthGateway extends HuaweiGateway {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('xyz.luan/audioplayers.global'),
+      (call) async => null,
+    );
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('xyz.luan/audioplayers'),
+      (call) async => 0,
+    );
+    messenger.setMockStreamHandler(
+      const EventChannel('xyz.luan/audioplayers.global/events'),
+      MockStreamHandler.inline(onListen: (args, sink) {}),
+    );
+    messenger.setMockStreamHandler(
+      const EventChannel('xyz.luan/audioplayers.events'),
+      MockStreamHandler.inline(onListen: (args, sink) {}),
+    );
+  });
+
   test('取流返回 990000：立即抛鉴权错误，不再请求后续档位', () async {
     final gateway = _AuthAtHiResGateway();
     final api = HuaweiAPI(gateway: gateway);
@@ -282,6 +339,28 @@ void main() {
     );
     expect(files, isNotEmpty);
     expect(files.first.url.toString(), contains('full_1.mp3'));
+  });
+
+  test('已取到 URL 但播放器全档失败时 lastHasUrl 仍为 true', () async {
+    AppLog.clear();
+    final audio = MuyuAudioController(
+      HuaweiAPI(gateway: _PlaybackGateway()),
+      player: _DecodeFailPlayer(),
+    );
+    final song = Song(
+      id: 'decode-fail',
+      name: '解码失败',
+      qualities: const <AudioQuality>{AudioQuality.standard},
+    );
+
+    await audio.playSong(song, list: <Song>[song]);
+
+    expect(audio.lastHasUrl, isTrue);
+    expect(audio.error, isNotNull);
+    expect(audio.error, contains('无法播放'));
+    expect(AppLog.exportText(), contains('hasUrl=true'));
+    expect(AppLog.exportText(), isNot(contains('hasUrl=false code=decode')));
+    audio.dispose();
   });
 
   test('默认音质选上游最高可播档，用户明确选标准时才降级', () {

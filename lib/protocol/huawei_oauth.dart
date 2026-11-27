@@ -1,10 +1,38 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
 import 'endpoints.dart';
 import 'huawei_gateway.dart';
+
+/// OAuth refresh_token 换到的新令牌对。
+class OAuthTokenPair {
+  const OAuthTokenPair({
+    required this.accessToken,
+    required this.refreshToken,
+  });
+
+  final String accessToken;
+
+  /// 上游未返回新 refresh_token 时沿用旧值。
+  final String refreshToken;
+}
+
+/// 便于测试注入的原始 OAuth token 响应。
+class OAuthTokenResponse {
+  const OAuthTokenResponse({required this.statusCode, required this.body});
+
+  final int statusCode;
+  final String body;
+}
+
+typedef OAuthTokenSender =
+    Future<OAuthTokenResponse> Function(
+      Uri uri,
+      Map<String, String> form,
+    );
 
 /// 一次 OAuth PKCE 授权尝试。
 ///
@@ -105,4 +133,115 @@ class OAuthCallback {
   const OAuthCallback({required this.code});
 
   final String code;
+}
+
+/// 用 refresh_token 静默续期 OAuth 账号 access token。
+///
+/// 成功时返回 access_token 和（可能轮换后的）refresh_token。任何错误都
+/// 只保留 OAuth 错误码/描述，不回显请求头、令牌或完整响应体。
+Future<OAuthTokenPair> refreshAccessToken(
+  String refreshToken, {
+  OAuthTokenSender? sender,
+}) async {
+  final token = refreshToken.trim();
+  if (token.isEmpty) {
+    throw const HuaweiException('refresh_token 为空，无法静默续期');
+  }
+  final form = <String, String>{
+    'grant_type': 'refresh_token',
+    'client_id': HuaweiPaths.clientId,
+    'refresh_token': token,
+  };
+  final uri = Uri.https(HuaweiPaths.tokenHost, HuaweiPaths.tokenPath);
+  final response = await (sender ?? _sendOAuthToken)(uri, form);
+  Object? decoded;
+  try {
+    decoded = jsonDecode(response.body);
+  } on FormatException {
+    decoded = null;
+  }
+  final decodedMap = decoded is Map<String, dynamic> ? decoded : null;
+  final errorCode = decodedMap == null
+      ? null
+      : _firstNonEmpty(decodedMap, const <String>[
+          'error',
+          'error_code',
+          'resultCode',
+          'code',
+        ]);
+  final errorDescription = decodedMap == null
+      ? null
+      : _firstNonEmpty(decodedMap, const <String>[
+          'error_description',
+          'errorDescription',
+          'resultMessage',
+          'message',
+          'msg',
+        ]);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    final detail = errorCode == null
+        ? ''
+        : '：$errorCode${errorDescription == null ? '' : '（$errorDescription）'}';
+    throw HuaweiException(
+      'OAuth 令牌刷新失败（HTTP ${response.statusCode}）$detail',
+      statusCode: response.statusCode,
+    );
+  }
+  if (decodedMap == null) {
+    throw const HuaweiException('OAuth 令牌刷新响应不是合法 JSON');
+  }
+  final accessToken = _firstNonEmpty(decodedMap, const <String>[
+    'access_token',
+    'accessToken',
+  ]);
+  if (accessToken == null) {
+    final code = errorCode ?? 'unknown';
+    final description = errorDescription ?? '';
+    throw HuaweiException(
+      'OAuth 令牌刷新失败：$code${description.isEmpty ? '' : '（$description）'}',
+    );
+  }
+  final nextRefresh =
+      _firstNonEmpty(decodedMap, const <String>['refresh_token', 'refreshToken']) ??
+      token;
+  return OAuthTokenPair(
+    accessToken: accessToken,
+    refreshToken: nextRefresh,
+  );
+}
+
+Future<OAuthTokenResponse> _sendOAuthToken(
+  Uri uri,
+  Map<String, String> form,
+) async {
+  final client = HttpClient();
+  try {
+    client.userAgent = HuaweiPaths.deviceContext;
+    final request = await client.postUrl(uri);
+    request.headers.set(
+      HttpHeaders.contentTypeHeader,
+      'application/x-www-form-urlencoded',
+    );
+    request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    request.write(Uri(queryParameters: form).query);
+    final response = await request.close();
+    final body = await response.transform(utf8.decoder).join();
+    return OAuthTokenResponse(statusCode: response.statusCode, body: body);
+  } on HandshakeException catch (e) {
+    throw HuaweiException('OAuth 令牌刷新 TLS 握手失败：${e.message}');
+  } catch (e) {
+    if (e is HuaweiException) rethrow;
+    throw HuaweiException('OAuth 令牌刷新请求失败：$e');
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String? _firstNonEmpty(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final value = json[key];
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+    if (value is num) return value.toString();
+  }
+  return null;
 }

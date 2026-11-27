@@ -15,11 +15,16 @@ import 'playback_clock.dart';
 
 /// 与沐语 MyGo audio.Player 对等：取流 → 租约代理 → 播放器。
 class MuyuAudioController extends ChangeNotifier {
-  MuyuAudioController(this.api,
-      {NeteaseApi? netease, KugouApi? kugou, QqApi? qq})
-      : netease = netease ?? NeteaseApi(),
-        kugou = kugou ?? KugouApi(),
-        qq = qq ?? QqApi() {
+  MuyuAudioController(
+    this.api, {
+    NeteaseApi? netease,
+    KugouApi? kugou,
+    QqApi? qq,
+    AudioPlayer? player,
+  }) : netease = netease ?? NeteaseApi(),
+       kugou = kugou ?? KugouApi(),
+       qq = qq ?? QqApi(),
+       _player = player ?? AudioPlayer() {
     _player.onPositionChanged.listen((p) {
       if (!_activePlayback || _startingPlayback) return;
       _clock.sync(p, playing: _clock.isPlaying);
@@ -52,9 +57,10 @@ class MuyuAudioController extends ChangeNotifier {
   final KugouApi kugou;
   final QqApi qq;
   MusicSource source = MusicSource.huawei;
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player;
 
   Song? current;
+
   /// 与沐语 `quality: hires` 一致：默认请求上游最高档；实际档位由
   /// `playSong` 根据该歌曲上游可用档位回退，不会强行把每首歌降成 MP3。
   AudioQuality quality = AudioQuality.hiRes;
@@ -64,9 +70,31 @@ class MuyuAudioController extends ChangeNotifier {
   Duration duration = Duration.zero;
   bool get playing => _clock.isPlaying;
 
+  /// 当前点歌入口（favorites/search/chart/playlist/artist/home/...）。
+  /// 由 AppState.play 在调用前写入，只用于日志，不参与业务判断。
+  String playEntry = '';
+
+  /// 队列尾部续播回调。只在「心动模式」队列启用；普通歌单和「现在就听」
+  /// 必须为 null，避免播完后错误地继续拉心动 privatefm 续页。
+  Future<List<Song>> Function()? onQueueExhausted;
+
+  /// 最近一次 playSong 最终尝试的档位 / 是否有完整 URL / 错误码。
+  /// 供 AppState 记录“每次点歌”的完整诊断行，也便于测试断言。
+  String? lastQualityType;
+  bool lastHasUrl = false;
+  String? lastErrorCode;
+
   /// 低频进度通知（播放器回调频率），仅给进度条等轻量组件监听。
-  final ValueNotifier<Duration> positionNotifier =
-      ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<Duration> positionNotifier = ValueNotifier<Duration>(
+    Duration.zero,
+  );
+
+  /// 歌词内容/时间线版本。切歌、刷新歌词、修改校准偏移后递增，
+  /// 让歌词列表用新 key 重建，避免继续复用旧歌的滚动/高亮状态。
+  final ValueNotifier<int> lyricRevision = ValueNotifier<int>(0);
+
+  /// 播放设置版本（音量/音效/音质/歌词偏移），供设置页和播放器同步刷新。
+  final ValueNotifier<int> settingsRevision = ValueNotifier<int>(0);
   final PlaybackClock _clock = PlaybackClock();
   bool _activePlayback = false;
   bool _startingPlayback = false;
@@ -107,24 +135,27 @@ class MuyuAudioController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _enqueuePlayerOperation(
-    Future<void> Function() operation,
-  ) {
+  Future<void> _enqueuePlayerOperation(Future<void> Function() operation) {
     final result = _playerQueue.then((_) => operation());
     _playerQueue = result.catchError((Object _) {});
     return result;
   }
 
-  void adjustLyricOffset(Duration delta) {
-    lyricOffset =
-        PlaybackClock.clampOffset(lyricOffset + delta, limit: maxLyricOffset);
-    notifyListeners();
+  void invalidateLyrics() {
+    lyricRevision.value++;
   }
 
-  void resetLyricOffset() {
-    lyricOffset = Duration.zero;
+  Future<void> setLyricOffset(Duration offset) async {
+    lyricOffset = PlaybackClock.clampOffset(offset, limit: maxLyricOffset);
     notifyListeners();
+    invalidateLyrics();
+    settingsRevision.value++;
   }
+
+  Future<void> adjustLyricOffset(Duration delta) =>
+      setLyricOffset(lyricOffset + delta);
+
+  Future<void> resetLyricOffset() => setLyricOffset(Duration.zero);
   double volume = 1.0;
   bool shuffle = false;
   String? error;
@@ -134,8 +165,13 @@ class MuyuAudioController extends ChangeNotifier {
 
   /// REA 观察：播放器音效 8 种（清晰增强/现场余韵/低频增厚/交响厅堂/近场监听/人声聚焦/环绕漫游）。
   static const List<String> kEffects = <String>[
-    '清晰增强', '现场余韵', '低频增厚', '交响厅堂',
-    '近场监听', '人声聚焦', '环绕漫游',
+    '清晰增强',
+    '现场余韵',
+    '低频增厚',
+    '交响厅堂',
+    '近场监听',
+    '人声聚焦',
+    '环绕漫游',
   ];
   String effect = '清晰增强';
 
@@ -175,8 +211,13 @@ class MuyuAudioController extends ChangeNotifier {
       queue = <Song>[song];
       index = 0;
     }
+    final hasPreset = song.localPath != null && song.localPath!.isNotEmpty;
     current = song;
+    invalidateLyrics();
     error = null;
+    lastQualityType = null;
+    lastHasUrl = false;
+    lastErrorCode = null;
     _activePlayback = false;
     _startingPlayback = false;
     _acceptStartingDuration = false;
@@ -186,6 +227,11 @@ class MuyuAudioController extends ChangeNotifier {
     position = Duration.zero;
     duration = Duration.zero;
     positionNotifier.value = Duration.zero;
+    AppLog.add(
+      'play',
+      'entry=$_entryLabel song=${song.id} source=${song.source.name} '
+          'presetUrl=$hasPreset queue=${queue.length}',
+    );
     notifyListeners();
 
     try {
@@ -206,61 +252,201 @@ class MuyuAudioController extends ChangeNotifier {
           _pendingDuration = null;
           await _player.setVolume(volume);
           _acceptStartingDuration = true;
-          await _player.play(DeviceFileSource(localPath));
+          await _player.play(
+            DeviceFileSource(localPath, mimeType: mimeTypeForPath(localPath)),
+          );
           _finishStartingPlayback(generation);
         });
+        lastQualityType = 'local';
+        lastHasUrl = true;
+        lastErrorCode = '000000';
+        notifyListeners();
+        AppLog.add(
+          'play',
+          'done entry=$_entryLabel song=${song.id} '
+              'source=${song.source.name} presetUrl=true qualityType=local '
+              'hasUrl=true code=000000',
+        );
         return;
       }
+
+      if (song.id.trim().isEmpty) {
+        throw StateError('歌曲缺少 contentCode（列表解析异常），无法取流');
+      }
+
       // 档位由上游决定：把 Song 从上游字段解析出的档位集合传给取流层。
       final List<HuaweiAudioFile> files = switch (source) {
         MusicSource.netease => await netease.audioFiles(song, quality: quality),
         MusicSource.kugou => await kugou.audioFiles(song),
         MusicSource.qq => await qq.audioFiles(song),
-        MusicSource.huawei =>
-          await api.audioFiles(song.id, upstreamQualities: song.qualities),
+        MusicSource.huawei => await api.audioFiles(
+          song.id,
+          upstreamQualities: song.qualities,
+        ),
       };
       if (files.isEmpty) {
         throw StateError('该音源未返回可播放地址');
       }
       if (generation != _trackGeneration) return;
-      final supported = files.isNotEmpty ? files.map((f) => f.quality).toSet() : song.qualities;
+
+      final supported = files.map((f) => f.quality).toSet();
       final wanted = chooseQuality(quality, supported);
-      HuaweiAudioFile chosen = files.firstWhere(
-        (f) => f.quality == wanted,
-        orElse: () => files.first,
-      );
-      error = null;
-      AppLog.add(
-        'play',
-        '${song.name} [${song.id}] ${chosen.quality.name} '
-        'qualityType=${chosen.qualityType} size=${chosen.sizeBytes} '
-        'preview=${chosen.preview} '
-        '${chosen.url.scheme}://${chosen.url.host}${chosen.url.path}',
-      );
-      final local = await LeaseProxy.instance.publish(chosen.url);
-      if (generation != _trackGeneration) return;
-      await _enqueuePlayerOperation(() async {
+      // 先试用户/默认最高档；如果 AVPlayer/ExoPlayer 在该容器上
+      // setSource 失败（日志里的 hiRes FLAC），继续降档，最终用
+      // standard MP3 兜底。仅解析出 URL 不够，必须真的能开播。
+      final candidates = playbackCandidates(files, wanted);
+      String? lastFailure;
+      for (final file in candidates) {
         if (generation != _trackGeneration) return;
-        _startingPlayback = true;
-        _acceptStartingDuration = false;
-        _pendingDuration = null;
-        await _player.setVolume(volume);
-        _acceptStartingDuration = true;
-        await _player.play(UrlSource(local.toString()));
-        _finishStartingPlayback(generation);
-      });
+        lastQualityType = file.qualityType;
+        lastHasUrl = true;
+        final mime = mimeTypeFor(file.url);
+        AppLog.add(
+          'play',
+          'attempt entry=$_entryLabel song=${song.id} '
+              'source=${song.source.name} presetUrl=false '
+              'quality=${file.quality.name} qualityType=${file.qualityType} '
+              'hasUrl=true mime=${mime ?? '-'}',
+        );
+
+        final Uri local;
+        try {
+          local = await LeaseProxy.instance.publish(file.url);
+        } catch (e) {
+          lastFailure = e.toString();
+          lastErrorCode = playbackErrorCode(e);
+          AppLog.add(
+            'play',
+            'lease-failed entry=$_entryLabel song=${song.id} '
+                'qualityType=${file.qualityType} hasUrl=true '
+                'code=$lastErrorCode error=${_shortError(e)}; 尝试下一档',
+          );
+          continue;
+        }
+        if (generation != _trackGeneration) return;
+
+        try {
+          await _enqueuePlayerOperation(() async {
+            if (generation != _trackGeneration) return;
+            _startingPlayback = true;
+            _acceptStartingDuration = false;
+            _pendingDuration = null;
+            await _player.setVolume(volume);
+            _acceptStartingDuration = true;
+            await _player.play(UrlSource(local.toString(), mimeType: mime));
+            _finishStartingPlayback(generation);
+          });
+          if (generation != _trackGeneration) return;
+          error = null;
+          lastErrorCode = '000000';
+          notifyListeners();
+          AppLog.add(
+            'play',
+            'done entry=$_entryLabel song=${song.id} '
+                'source=${song.source.name} presetUrl=false '
+                'quality=${file.quality.name} qualityType=${file.qualityType} '
+                'hasUrl=true code=000000 mime=${mime ?? '-'} '
+                'url=${file.url.scheme}://${file.url.host}${file.url.path}',
+          );
+          return;
+        } catch (e) {
+          if (generation != _trackGeneration) return;
+          lastFailure = e.toString();
+          lastErrorCode = playbackErrorCode(e);
+          _startingPlayback = false;
+          _acceptStartingDuration = false;
+          _activePlayback = false;
+          AppLog.add(
+            'play',
+            'decode-failed entry=$_entryLabel song=${song.id} '
+                'quality=${file.quality.name} qualityType=${file.qualityType} '
+                'hasUrl=true code=$lastErrorCode error=${_shortError(e)}; '
+                '尝试下一档',
+          );
+          // 失败后显式 stop，避免播放器仍停在 failed item 上影响下一档。
+          await _enqueuePlayerOperation(() async {
+            if (generation == _trackGeneration) await _player.stop();
+          }).catchError((Object _) {});
+        }
+      }
+
+      throw StateError(
+        '该歌曲所选音质在当前设备无法播放'
+        '（已尝试 ${candidates.length} 档）'
+        '${lastFailure == null ? '' : '：${_shortError(lastFailure)}'}',
+      );
     } catch (e) {
       if (generation != _trackGeneration) return;
       _startingPlayback = false;
       _acceptStartingDuration = false;
       _activePlayback = false;
-      error = e.toString();
+      lastErrorCode = playbackErrorCode(e);
+      error = _errorText(e);
       AppLog.add(
         'play',
-        'error ${song.name} [${song.id}] quality=${quality.name}: $e',
+        'error entry=$_entryLabel song=${song.id} '
+            'source=${song.source.name} presetUrl=$hasPreset '
+            'quality=${quality.name} qualityType=${lastQualityType ?? '-'} '
+            'hasUrl=$lastHasUrl code=$lastErrorCode: $e',
       );
       notifyListeners();
     }
+  }
+
+  String get _entryLabel => playEntry.isEmpty ? 'queue' : playEntry;
+
+  /// 按“目标档位 → 更低档”排序。目标档位之上不试，避免用户选标准
+  /// 时又偷偷拉 Hi-Res；目标档位本身失败后逐级降，最终一定包含 standard。
+  @visibleForTesting
+  static List<HuaweiAudioFile> playbackCandidates(
+    List<HuaweiAudioFile> files,
+    AudioQuality wanted,
+  ) {
+    final sorted = List<HuaweiAudioFile>.of(files)
+      ..sort((a, b) => b.quality.index.compareTo(a.quality.index));
+    final start = sorted.indexWhere((f) => f.quality == wanted);
+    if (start < 0) return sorted;
+    return sorted.sublist(start);
+  }
+
+  /// 明确告诉播放器容器格式：音频 URL 在租约代理下没有扩展名，不能
+  /// 只靠 URL 猜；FLAC 的 audio/x-flac 在 iOS 上也可能识别失败。
+  @visibleForTesting
+  static String? mimeTypeFor(Uri url) {
+    final path = url.path.toLowerCase();
+    if (path.endsWith('.mp3')) return 'audio/mpeg';
+    if (path.endsWith('.flac')) return 'audio/flac';
+    if (path.endsWith('.m4a') || path.endsWith('.mp4')) return 'audio/mp4';
+    if (path.endsWith('.aac')) return 'audio/aac';
+    if (path.endsWith('.wav')) return 'audio/wav';
+    if (path.endsWith('.ogg') || path.endsWith('.oga')) return 'audio/ogg';
+    return null;
+  }
+
+  @visibleForTesting
+  static String? mimeTypeForPath(String path) => mimeTypeFor(Uri.file(path));
+
+  /// 从异常里提取 6 位业务码；平台解码错误统一记为 decode。
+  @visibleForTesting
+  static String playbackErrorCode(Object error) {
+    final text = error.toString();
+    final hit = RegExp(r'\b\d{6}\b').firstMatch(text);
+    if (hit != null) return hit.group(0)!;
+    if (text.contains('DarwinAudioError') ||
+        text.contains('Failed to set') ||
+        text.contains('AVPlayerItem')) {
+      return 'decode';
+    }
+    return 'unknown';
+  }
+
+  static String _shortError(Object error) =>
+      error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// UI SnackBar 不显示 Dart 的 "Bad state:" 前缀，错误保持可读。
+  static String _errorText(Object error) {
+    final text = _shortError(error);
+    return text.startsWith('Bad state: ') ? text.substring(11) : text;
   }
 
   void _finishStartingPlayback(int generation) {
@@ -321,12 +507,14 @@ class MuyuAudioController extends ChangeNotifier {
 
   Future<void> setVolume(double v) async {
     volume = v.clamp(0.0, 1.0);
-    await _player.setVolume(volume);
+    settingsRevision.value++;
     notifyListeners();
+    await _player.setVolume(volume);
   }
 
   Future<void> setQuality(AudioQuality q) async {
     quality = q;
+    settingsRevision.value++;
     notifyListeners();
     final song = current;
     if (song != null) await playSong(song, list: queue);
@@ -342,6 +530,7 @@ class MuyuAudioController extends ChangeNotifier {
   void setEffect(String value) {
     if (kEffects.contains(value)) {
       effect = value;
+      settingsRevision.value++;
       notifyListeners();
     }
   }
@@ -391,20 +580,73 @@ class MuyuAudioController extends ChangeNotifier {
     if (queue.isEmpty) return;
     // REA 观察：单曲循环时播到结尾重播当前曲。
     if (playMode == PlayMode.single && current != null) {
+      playEntry = 'next';
       await playSong(current!, list: queue);
       return;
     }
+
+    // 只有到达队列真实尾部才请求续播；普通歌单没有回调，保持原循环语义。
+    if (index >= queue.length - 1 && onQueueExhausted != null) {
+      final before = queue.length;
+      var more = const <Song>[];
+      try {
+        more = await onQueueExhausted!();
+      } catch (e) {
+        AppLog.add('play', 'queue-exhausted 失败，继续本地循环：$e');
+      }
+      final seen = queue
+          .map((song) => song.id)
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      for (final song in more) {
+        if (song.id.isEmpty || seen.add(song.id)) queue.add(song);
+      }
+      if (queue.length > before) {
+        playEntry = 'next';
+        await _playForward(before);
+        return;
+      }
+    }
+
     final nextIndex = playMode == PlayMode.shuffle
         ? (DateTime.now().millisecondsSinceEpoch % queue.length)
-        : (index + 1) % queue.length;
-    index = nextIndex;
-    await playSong(queue[nextIndex]);
+        : (index < 0 ? 0 : (index + 1) % queue.length);
+    playEntry = 'next';
+    await _playForward(nextIndex);
   }
 
   Future<void> previous() async {
     if (queue.isEmpty) return;
-    index = (index - 1 + queue.length) % queue.length;
-    await playSong(queue[index]);
+    playEntry = 'previous';
+    final start = index <= 0 ? queue.length - 1 : index - 1;
+    final attempts = queue.length < 5 ? queue.length : 5;
+    String? lastError;
+    for (var i = 0; i < attempts; i++) {
+      final candidate = (start - i) % queue.length;
+      index = candidate;
+      await playSong(queue[candidate]);
+      if (error == null) return;
+      lastError = error;
+      await stop();
+    }
+    error = lastError ?? '上一首无法播放';
+    notifyListeners();
+  }
+
+  /// 从 start 开始最多尝试 5 首；失败后显式 stop 再前进，绝不递归 next()。
+  Future<void> _playForward(int start) async {
+    final attempts = queue.length < 5 ? queue.length : 5;
+    String? lastError;
+    for (var i = 0; i < attempts; i++) {
+      final candidate = (start + i) % queue.length;
+      index = candidate;
+      await playSong(queue[candidate]);
+      if (error == null) return;
+      lastError = error;
+      await stop();
+    }
+    error = lastError ?? '队列中的歌曲均无法播放';
+    notifyListeners();
   }
 
   Future<void> stop() async {
@@ -429,6 +671,8 @@ class MuyuAudioController extends ChangeNotifier {
   void dispose() {
     _sleepTicker?.cancel();
     positionNotifier.dispose();
+    lyricRevision.dispose();
+    settingsRevision.dispose();
     _player.dispose();
     super.dispose();
   }

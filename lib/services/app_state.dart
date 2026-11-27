@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show Color;
 
@@ -5,6 +7,7 @@ import '../models.dart';
 import '../models_home.dart';
 import '../models_skin.dart';
 import '../protocol/huawei_api.dart';
+import '../protocol/huawei_oauth.dart';
 import '../protocol/kugou_api.dart';
 import '../protocol/netease_api.dart';
 import '../protocol/qq_api.dart';
@@ -31,7 +34,7 @@ class AppState extends ChangeNotifier {
           kugou: kugou,
           qq: qq,
         );
-    audio.addListener(notifyListeners);
+    audio.addListener(_onAudioChanged);
     local.addListener(notifyListeners);
     // 授权码换到的账号 token / 音乐 token 变化时立刻持久化。
     api.gateway.onSessionChanged = () {
@@ -91,6 +94,20 @@ class AppState extends ChangeNotifier {
   void Function(String message)? onError;
   bool showLyrics = false;
   bool showPlayer = false;
+  bool needsRelogin = false;
+
+  final ValueNotifier<int> lyricsRevision = ValueNotifier<int>(0);
+
+  HuaweiCredentials? _savedHuaweiCredentials;
+  HuaweiCredentials? get savedHuaweiCredentials => _savedHuaweiCredentials;
+
+  Timer? _sessionKeepAliveTimer;
+  Future<void>? _keepAliveInFlight;
+  int _lastReloginEpoch = 0;
+  int _lyricsLoadGeneration = 0;
+  String? _lyricsSongId;
+  String? _lastAudioSongId;
+  bool _disposed = false;
 
   /// 12 款主题索引（源码事实 tinglan/theme.go），默认晨光。
   int themeIndex = 0;
@@ -114,8 +131,8 @@ class AppState extends ChangeNotifier {
   /// 测试/日志可见：被防风暴保护抑制的 force 次数。
   int get suppressedHomeRefreshes => _suppressedHomeRefreshes;
 
-  /// 播放器皮肤（REA：4 种播放器样式 + 歌词样式 + 沉浸光感）。
-  PlayerStyle playerStyle = PlayerStyle.modern;
+  /// 兼容旧调用；项目统一使用经典播放器，样式不再切换。
+  PlayerStyle playerStyle = PlayerStyle.classic;
   LyricStyle lyricStyle = const LyricStyle();
   bool immersiveFullscreen = false;
   ImmersiveGlass glass = ImmersiveGlass.normal;
@@ -124,40 +141,200 @@ class AppState extends ChangeNotifier {
   bool glassSlide = true;
 
   void setPlayerStyle(PlayerStyle style) {
-    playerStyle = style;
+    playerStyle = PlayerStyle.classic;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void updateLyricStyle(LyricStyle style) {
     lyricStyle = style;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void toggleImmersiveFullscreen() {
     immersiveFullscreen = !immersiveFullscreen;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void setGlass(ImmersiveGlass value) {
     glass = value;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void setGlowColor(Color color) {
     glowColor = color;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void updateSkin({bool? glassPress, bool? glassSlide}) {
     if (glassPress != null) this.glassPress = glassPress;
     if (glassSlide != null) this.glassSlide = glassSlide;
     notifyListeners();
+    bumpLyricsRevision();
+    unawaited(persistSession());
+  }
+
+  void bumpLyricsRevision() {
+    if (_disposed) return;
+    lyricsRevision.value++;
+  }
+
+  Future<void> setVolume(double v) async {
+    await audio.setVolume(v);
+    await persistSession();
+    bumpLyricsRevision();
+    notifyListeners();
+  }
+
+  void setEffect(String value) {
+    audio.setEffect(value);
+    bumpLyricsRevision();
+    notifyListeners();
+    unawaited(persistSession());
+  }
+
+  Future<void> setQuality(AudioQuality q) async {
+    await audio.setQuality(q);
+    await persistSession();
+    bumpLyricsRevision();
+    notifyListeners();
+  }
+
+  Future<void> setLyricOffset(Duration offset) async {
+    await audio.adjustLyricOffset(offset - audio.lyricOffset);
+    await persistSession();
+    bumpLyricsRevision();
+    notifyListeners();
+  }
+
+  Future<void> resetLyricOffset() async {
+    await audio.resetLyricOffset();
+    await persistSession();
+    bumpLyricsRevision();
+    notifyListeners();
+  }
+
+  Future<void> saveHuaweiCredentials(String account, String password) async {
+    final credentials = HuaweiCredentials(
+      account: account.trim(),
+      password: password,
+    );
+    if (credentials.account.isEmpty || credentials.password.isEmpty) {
+      throw ArgumentError('华为账号和密码不能为空');
+    }
+    await _sessionStore.writeCredentials(credentials);
+    _savedHuaweiCredentials = credentials;
+    notifyListeners();
+  }
+
+  Future<void> clearHuaweiCredentials() async {
+    await _sessionStore.clearCredentials();
+    _savedHuaweiCredentials = null;
+    notifyListeners();
+  }
+
+  void clearReloginRequest() {
+    if (!needsRelogin) return;
+    needsRelogin = false;
+    notifyListeners();
+  }
+
+  void startSessionKeepAlive() {
+    if (_disposed) return;
+    _sessionKeepAliveTimer ??= Timer.periodic(
+      const Duration(hours: 1),
+      (_) => unawaited(_keepHuaweiSession()),
+    );
+  }
+
+  Future<void> _keepHuaweiSession() {
+    final running = _keepAliveInFlight;
+    if (running != null) return running;
+    final future = _keepHuaweiSessionNow();
+    _keepAliveInFlight = future.whenComplete(() {
+      _keepAliveInFlight = null;
+    });
+    return _keepAliveInFlight!;
+  }
+
+  Future<void> _keepHuaweiSessionNow() async {
+    if (_disposed) return;
+    final hasRefreshToken =
+        (api.gateway.refreshToken?.trim().isNotEmpty ?? false);
+    final hasAccountToken =
+        (api.gateway.accountToken?.trim().isNotEmpty ?? false);
+    if (!hasRefreshToken && !hasAccountToken) return;
+
+    final refreshed = await _refreshHuaweiSession();
+    if (refreshed) {
+      needsRelogin = false;
+      await persistSession();
+      await loadLibrary();
+      notifyListeners();
+      return;
+    }
+
+    final saved = _savedHuaweiCredentials ?? await _sessionStore.readCredentials();
+    if (saved != null) {
+      _savedHuaweiCredentials = saved;
+      _lastReloginEpoch = DateTime.now().millisecondsSinceEpoch;
+      needsRelogin = true;
+      error = '华为会话已过期，请完成一次 OAuth 验证以刷新登录会话';
+      unawaited(persistSession());
+    } else {
+      needsRelogin = false;
+      error = '华为会话已过期，请重新登录华为账号';
+    }
+    notifyListeners();
+  }
+
+  Future<bool> _refreshHuaweiSession() async {
+    final refreshToken = api.gateway.refreshToken?.trim() ?? '';
+    if (refreshToken.isNotEmpty) {
+      try {
+        final pair = await refreshAccessToken(refreshToken);
+        api.gateway.accountToken = pair.accessToken;
+        api.gateway.refreshToken = pair.refreshToken;
+        await api.gateway.exchangeMusicToken(pair.accessToken);
+        await api.refreshProfile();
+        AppLog.add('state', 'OAuth refresh token 静默续期成功');
+        return true;
+      } catch (_) {
+        AppLog.add('state', 'OAuth refresh token 静默续期失败');
+      }
+    }
+
+    final accountToken = api.gateway.accountToken?.trim() ?? '';
+    if (accountToken.isNotEmpty) {
+      try {
+        await api.gateway.exchangeMusicToken(accountToken);
+        await api.refreshProfile();
+        AppLog.add('state', '账号 access token 静默续期成功');
+        return true;
+      } catch (_) {
+        AppLog.add('state', '账号 access token 静默续期失败');
+      }
+    }
+    return false;
   }
 
   List<Song> homeSongs = <Song>[];
   List<Song> searchResults = <Song>[];
   List<Artist> searchArtists = <Artist>[];
   List<Playlist> searchAlbums = <Playlist>[];
+  List<Playlist> searchPlaylists = <Playlist>[];
+  bool hasMoreSearch = false;
+  bool loadingMoreSearch = false;
+  int searchStart = 0;
   List<Song> favorites = <Song>[];
   List<Playlist> playlists = <Playlist>[];
   List<Playlist> charts = <Playlist>[];
@@ -176,6 +353,14 @@ class AppState extends ChangeNotifier {
   bool neteaseHasMorePlaylists = true;
   String? activeChartId;
   String searchKeyword = '';
+
+  /// 华为「心动模式」的 privatefm 续播游标。只属于心动队列，
+  /// 不参与现在就听/每日/新歌/热歌的数据兜底。
+  String radioNext = '';
+  bool radioMore = false;
+  String radioRefInfo = '';
+  String radioScenario = '16';
+  String radioMode = '1';
 
   /// 歌单详情：点击歌单卡片加载其中歌曲。
   Playlist? activePlaylist;
@@ -276,7 +461,15 @@ class AppState extends ChangeNotifier {
       final data = await api.discover();
       discover = _rotateDiscover(data);
       // homeSongs 只做全局默认播放入口，不再作为各卡片的公共 fallback。
-      homeSongs = discover.recommended;
+      // 但如果 8011 为空，用同一份 discover 里真实可用的板块兜底，
+      // 避免默认播放入口也变成空列表。
+      homeSongs = discover.recommended.isNotEmpty
+          ? discover.recommended
+          : (discover.radio.isNotEmpty
+                ? discover.radio
+                : (discover.daily.isNotEmpty
+                      ? discover.daily
+                      : discover.hot));
       playlists = discover.playlists;
       charts = discover.charts;
       discoverLoaded =
@@ -452,6 +645,16 @@ class AppState extends ChangeNotifier {
     searchResults = <Song>[];
     searchArtists = <Artist>[];
     searchAlbums = <Playlist>[];
+    searchPlaylists = <Playlist>[];
+    hasMoreSearch = false;
+    loadingMoreSearch = false;
+    searchStart = 0;
+    radioNext = '';
+    radioMore = false;
+    radioRefInfo = '';
+    radioScenario = '16';
+    radioMode = '1';
+    audio.onQueueExhausted = null;
     neteaseHome = const NeteaseHomeData();
     neteaseHomeError = null;
     neteasePlaylistOffset = 0;
@@ -633,6 +836,8 @@ class AppState extends ChangeNotifier {
 
   /// 首页 5 张大卡：每张都走真实接口，失败时显示错误状态，不填假歌。
   Future<void> playCard(String action) async {
+    // 切到任何卡片先摘掉上一轮心动续播；只有 heart 成功起播后再挂回。
+    audio.onQueueExhausted = null;
     await _guard(() async {
       late List<Song> songs;
       final ne = source == MusicSource.netease;
@@ -676,43 +881,27 @@ class AppState extends ChangeNotifier {
         }
         return;
       }
+      if (!ne) {
+        await _playHuaweiCard(action);
+        return;
+      }
       switch (action) {
         case 'radio':
-          songs = ne
-              ? (neteaseHome.radioSongs.isNotEmpty
-                    ? neteaseHome.radioSongs
-                    : await netease.privateFm())
-              : await api.privateRadio(mode: '1');
+          songs = neteaseHome.radioSongs.isNotEmpty
+              ? neteaseHome.radioSongs
+              : await netease.privateFm();
           break;
         case 'daily':
-          songs = ne
-              ? (neteaseHome.dailySongs.isNotEmpty
-                    ? neteaseHome.dailySongs
-                    : await netease.dailySongs())
-              : (discover.daily.isNotEmpty
-                    ? discover.daily
-                    : await api.daily30());
-          break;
         case 'heart':
-          songs = ne
-              ? (neteaseHome.dailySongs.isNotEmpty
-                    ? neteaseHome.dailySongs
-                    : await netease.dailySongs())
-              : await api.privateRadio(mode: '2');
+          songs = neteaseHome.dailySongs.isNotEmpty
+              ? neteaseHome.dailySongs
+              : await netease.dailySongs();
           break;
         case 'new':
+        case 'hot':
           songs = discover.newSongs.isNotEmpty
               ? discover.newSongs
-              : (ne ? await netease.newSongs() : const <Song>[]);
-          break;
-        case 'hot':
-          if (ne) {
-            songs = discover.newSongs.isNotEmpty
-                ? discover.newSongs
-                : await netease.newSongs();
-          } else {
-            songs = discover.hot;
-          }
+              : await netease.newSongs();
           break;
         default:
           songs = homeSongs;
@@ -725,43 +914,256 @@ class AppState extends ChangeNotifier {
     });
   }
 
+  /// 华为五个首页卡片各用各的板块：不从其他卡片借歌，接口空就保持空态。
+  ///
+  /// 语义（最新 REA）：
+  /// - `listen` /「现在就听」来自首页聚合 `pmf001` 顶层直接歌曲，不走 privatefm；
+  /// - `heart` /「心动模式」首屏走 `heartFmFirstPage()`，续页才用 privatefm；
+  /// - `daily` / `new` / `hot` 各自只读本板块或本板块的专用接口。
+  Future<void> _playHuaweiCard(String action) async {
+    // 普通卡片默认不继承任何电台续播；只有心动模式成功起播后重新挂回调。
+    audio.onQueueExhausted = null;
+    var songs = const <Song>[];
+    switch (action) {
+      case 'radio':
+        // 「现在就听」= 首页 pmf001 顶层直接歌曲，不再请求 privatefm。
+        songs = discover.listen;
+        break;
+      case 'daily':
+        songs = discover.daily.isNotEmpty
+            ? discover.daily
+            : await _soft(api.daily30(), <Song>[]);
+        if (songs.isNotEmpty) {
+          discover = discover.copyWith(daily: songs);
+        }
+        break;
+      case 'heart':
+        // 心动首屏优先走独立接口；失败/空只回退同源 heart 缓存，
+        // 不拿 listen/radio/daily/hot 填充，也不再用 privateRadio(mode:'2') 猜。
+        try {
+          final page = await api.heartFmFirstPage();
+          if (page.songs.isNotEmpty) {
+            songs = page.songs;
+            discover = discover.copyWith(heart: songs);
+            radioNext = page.next;
+            radioMore = page.more;
+            radioRefInfo = page.refInfo;
+            radioScenario = '16';
+            radioMode = '1';
+          } else {
+            AppLog.add('state', 'heartFmFirstPage 返回空，回退本板块缓存');
+            songs = discover.heart;
+          }
+        } catch (e) {
+          AppLog.add('state', 'heartFmFirstPage 失败，回退本板块缓存：$e');
+          songs = discover.heart;
+        }
+        break;
+      case 'new':
+        songs = discover.newSongs;
+        break;
+      case 'hot':
+        songs = discover.hot.isNotEmpty
+            ? discover.hot
+            : await _soft(api.chartSongs(HuaweiAPI.hotChartId), <Song>[]);
+        if (songs.isNotEmpty) {
+          discover = discover.copyWith(hot: songs);
+        }
+        break;
+      default:
+        error = '「$action」独立板块未返回歌曲';
+        return;
+    }
+    if (songs.isEmpty) {
+      error = switch (action) {
+        'radio' => '「现在就听」独立板块未返回歌曲',
+        'heart' => '「心动模式」独立板块未返回歌曲',
+        _ => '「$action」独立板块未返回歌曲',
+      };
+      return;
+    }
+    await play(songs.first, queue: songs);
+    if (audio.error != null) return;
+    if (action == 'heart') {
+      audio.playEntry = 'heart';
+      audio.onQueueExhausted = extendRadioQueue;
+    } else {
+      // 现在就听/每日/新歌/热歌都保持独立队列，播完不续任何电台。
+      audio.onQueueExhausted = null;
+    }
+  }
+
+  /// 心动模式播放到队列尾部时用 privatefm 请求下一页（续页形状固定为
+  /// `mode=1` + `rcmScenario=16`），只把新歌追加到 `discover.heart`；
+  /// 不会写入「现在就听」的 `discover.listen`。
+  Future<List<Song>> extendRadioQueue() async {
+    if (!radioMore || (radioNext.isEmpty && radioRefInfo.isEmpty)) {
+      return const <Song>[];
+    }
+    final requestedNext = radioNext;
+    try {
+      final page = await api.privateFmPage(
+        mode: radioMode,
+        rcmScenario: '16',
+        refInfo: radioRefInfo,
+        next: requestedNext,
+      );
+      radioNext = page.next;
+      radioMore = page.more;
+      radioRefInfo = page.refInfo;
+      radioScenario = '16';
+      radioMode = '1';
+      final seen = discover.heart
+          .map((song) => song.id)
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final added = <Song>[];
+      for (final song in page.songs) {
+        if (song.id.isEmpty || seen.add(song.id)) added.add(song);
+      }
+      if (added.isNotEmpty) {
+        discover = discover.copyWith(
+          heart: <Song>[...discover.heart, ...added],
+        );
+      }
+      notifyListeners();
+      return added;
+    } catch (e) {
+      error = '电台续播失败：${_readableError(e)}';
+      AppLog.add('state', '$error');
+      notifyListeners();
+      return const <Song>[];
+    }
+  }
+
   Future<void> doSearch(String keyword) async {
     searchKeyword = keyword.trim();
     if (searchKeyword.isEmpty) {
       searchResults = <Song>[];
       searchArtists = <Artist>[];
       searchAlbums = <Playlist>[];
+      searchPlaylists = <Playlist>[];
+      hasMoreSearch = false;
+      loadingMoreSearch = false;
+      searchStart = 0;
       notifyListeners();
       return;
     }
     await _guard(() async {
+      searchResults = <Song>[];
+      searchArtists = <Artist>[];
+      searchAlbums = <Playlist>[];
+      searchPlaylists = <Playlist>[];
+      hasMoreSearch = false;
+      searchStart = 0;
       if (source == MusicSource.netease) {
         searchResults = await netease.search(searchKeyword);
-        searchArtists = <Artist>[];
-        searchAlbums = <Playlist>[];
       } else if (source == MusicSource.kugou) {
         searchResults = await kugou.search(searchKeyword);
-        searchArtists = <Artist>[];
-        searchAlbums = <Playlist>[];
       } else if (source == MusicSource.qq) {
         searchResults = await qq.search(searchKeyword);
-        searchArtists = <Artist>[];
-        searchAlbums = <Playlist>[];
       } else {
-        final result = await api.searchAll(searchKeyword);
+        final result = await api.searchAll(
+          searchKeyword,
+          start: 0,
+          limit: 30,
+          includePlaylists: true,
+        );
         searchResults = result.songs;
         searchArtists = result.artists;
         searchAlbums = result.albums;
+        searchPlaylists = result.playlists;
+        hasMoreSearch = _searchPageHasMore(result);
+        searchStart = 30;
       }
       tab = 1;
     });
   }
 
+  /// 搜索页“加载更多”按钮：不做无限滚动，失败时保留已有结果。
+  Future<void> loadMoreSearch() async {
+    if (source != MusicSource.huawei ||
+        loadingMoreSearch ||
+        !hasMoreSearch ||
+        searchKeyword.trim().isEmpty) {
+      return;
+    }
+    final keyword = searchKeyword;
+    final start = searchStart;
+    loadingMoreSearch = true;
+    error = null;
+    notifyListeners();
+    try {
+      final result = await api.searchAll(
+        keyword,
+        start: start,
+        limit: 30,
+        includePlaylists: true,
+      );
+      if (keyword != searchKeyword) return;
+      _appendSearchPage(result);
+      hasMoreSearch = _searchPageHasMore(result);
+      searchStart = start + 30;
+    } catch (e) {
+      error = _readableError(e);
+      AppLog.add('state', '搜索加载更多失败：$error');
+    } finally {
+      loadingMoreSearch = false;
+      notifyListeners();
+    }
+  }
+
+  static bool _searchPageHasMore(HuaweiSearchResult result) =>
+      result.songs.length >= 30 ||
+      result.artists.length >= 30 ||
+      result.albums.length >= 30 ||
+      result.playlists.length >= 30;
+
+  void _appendSearchPage(HuaweiSearchResult result) {
+    final songIds = searchResults
+        .map((song) => song.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    for (final song in result.songs) {
+      if (song.id.isEmpty || songIds.add(song.id)) searchResults.add(song);
+    }
+    final artistIds = searchArtists
+        .map((artist) => artist.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    for (final artist in result.artists) {
+      if (artist.id.isEmpty || artistIds.add(artist.id)) {
+        searchArtists.add(artist);
+      }
+    }
+    final albumIds = searchAlbums
+        .map((album) => album.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    for (final album in result.albums) {
+      if (album.id.isEmpty || albumIds.add(album.id)) searchAlbums.add(album);
+    }
+    final playlistIds = searchPlaylists
+        .map((playlist) => playlist.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    for (final playlist in result.playlists) {
+      if (playlist.id.isEmpty || playlistIds.add(playlist.id)) {
+        searchPlaylists.add(playlist);
+      }
+    }
+  }
+
+  static String _readableError(Object error) {
+    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.startsWith('Bad state: ') ? text.substring(11) : text;
+  }
+
   Future<void> showLyricsFor(Song song) async {
     showPlayer = true;
-    showLyrics = true;
+    showLyrics = false;
     notifyListeners();
-    await _loadLyrics(song);
+    await refreshLyricsForCurrentSong(force: true);
   }
 
   /// 点播放条进入全屏播放器（默认封面/唱片区），不切到歌词焦点。
@@ -769,7 +1171,7 @@ class AppState extends ChangeNotifier {
     showPlayer = true;
     showLyrics = false;
     notifyListeners();
-    await _loadLyrics(song);
+    await refreshLyricsForCurrentSong(force: true);
   }
 
   void closeFullPlayer() {
@@ -778,27 +1180,88 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _loadLyrics(Song song) async {
-    try {
-      if (source == MusicSource.huawei && song.lyricUrl != null) {
-        lyrics = await api.lyricsFromUrl(song.lyricUrl!);
-        if (lyrics.isEmpty) lyrics = await api.lyrics(song.id);
-      } else {
-        lyrics = switch (source) {
-          MusicSource.netease => await netease.lyrics(song.id),
-          MusicSource.kugou => await kugou.lyrics(song.id),
-          MusicSource.qq => await qq.lyrics(song.id),
-          MusicSource.huawei => await api.lyrics(song.id),
-        };
-      }
-    } catch (e) {
+  void _onAudioChanged() {
+    final current = audio.current;
+    if (current?.id != _lastAudioSongId) {
+      _lastAudioSongId = current?.id;
+      _lyricsLoadGeneration++;
+      _lyricsSongId = null;
       lyrics = <LyricLine>[];
-      AppLog.add('lyrics', '${song.name} [${song.id}]: $e');
+      bumpLyricsRevision();
+    }
+    // 取流成功后才加载歌词：失败时不能为了歌词再发一次 playUrl。
+    // 正常播放会复用 audioFiles 已缓存进 HuaweiAPI 的歌词地址。
+    if (current != null &&
+        current.id != _lyricsSongId &&
+        audio.lastErrorCode == '000000' &&
+        audio.error == null) {
+      _lyricsSongId = current.id;
+      final generation = ++_lyricsLoadGeneration;
+      unawaited(_loadLyrics(current, generation: generation));
     }
     notifyListeners();
   }
 
+  Future<void> refreshLyricsForCurrentSong({bool force = false}) async {
+    final current = audio.current;
+    if (current == null) {
+      _lyricsLoadGeneration++;
+      _lyricsSongId = null;
+      lyrics = <LyricLine>[];
+      bumpLyricsRevision();
+      notifyListeners();
+      return;
+    }
+    if (!force && current.id == _lyricsSongId && lyrics.isNotEmpty) {
+      bumpLyricsRevision();
+      notifyListeners();
+      return;
+    }
+    _lyricsLoadGeneration++;
+    _lyricsSongId = current.id;
+    lyrics = <LyricLine>[];
+    bumpLyricsRevision();
+    notifyListeners();
+    await _loadLyrics(current, generation: _lyricsLoadGeneration);
+  }
+
+  Future<void> _loadLyrics(Song song, {int? generation}) async {
+    final requestGeneration = generation ?? ++_lyricsLoadGeneration;
+    List<LyricLine> loaded = <LyricLine>[];
+    try {
+      if (source == MusicSource.huawei && song.lyricUrl != null) {
+        loaded = await api.lyricsFromUrl(song.lyricUrl!);
+        if (loaded.isEmpty) {
+          loaded = await api.lyrics(song.id, allowPlaybackRequest: false);
+        }
+      } else {
+        loaded = switch (source) {
+          MusicSource.netease => await netease.lyrics(song.id),
+          MusicSource.kugou => await kugou.lyrics(song.id),
+          MusicSource.qq => await qq.lyrics(song.id),
+          MusicSource.huawei => await api.lyrics(
+            song.id,
+            allowPlaybackRequest: false,
+          ),
+        };
+      }
+    } catch (e) {
+      AppLog.add('lyrics', '${song.name} [${song.id}]: $e');
+    }
+    if (_disposed ||
+        requestGeneration != _lyricsLoadGeneration ||
+        _lyricsSongId != song.id) {
+      return;
+    }
+    lyrics = loaded;
+    bumpLyricsRevision();
+    notifyListeners();
+  }
+
   Future<void> play(Song song, {List<Song>? queue}) async {
+    // 普通列表不继承上一张心动队列的服务端续播；只有心动模式成功起播后
+    // 才重新挂上回调。
+    audio.onQueueExhausted = null;
     final list = (queue == null || queue.isEmpty)
         ? <Song>[song]
         : List<Song>.of(queue);
@@ -807,12 +1270,28 @@ class AppState extends ChangeNotifier {
       list.insert(0, song);
       start = 0;
     }
+    final entry = _playEntryName(song, queue);
+    audio.playEntry = entry;
     error = null;
     final attempts = list.length < 5 ? list.length : 5;
     String? lastError;
     for (var i = 0; i < attempts; i++) {
       final candidate = list[(start + i) % list.length];
+      final hasPreset =
+          candidate.localPath != null && candidate.localPath!.isNotEmpty;
+      AppLog.add(
+        'play',
+        'entry=$entry song=${candidate.id} source=${candidate.source.name} '
+        'presetUrl=$hasPreset queue=${list.length}',
+      );
       await audio.playSong(candidate, list: list);
+      AppLog.add(
+        'play',
+        'entry=$entry song=${candidate.id} '
+        'qualityType=${audio.lastQualityType ?? '-'} '
+        'hasUrl=${audio.lastHasUrl} code=${audio.lastErrorCode ?? '-'} '
+        'error=${audio.error == null ? '-' : (audio.error!.length > 180 ? '${audio.error!.substring(0, 180)}…' : audio.error!)}',
+      );
       if (audio.error == null) {
         error = null;
         notifyListeners();
@@ -828,6 +1307,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 从队列对象/内容推断点歌入口，仅用于日志与排障，不参与播放逻辑。
+  String _playEntryName(Song song, List<Song>? queue) {
+    bool same(List<Song> source) {
+      if (queue == null) return false;
+      if (identical(queue, source)) return true;
+      if (queue.length != source.length || source.isEmpty) return false;
+      for (var i = 0; i < queue.length; i++) {
+        if (queue[i].id != source[i].id) return false;
+      }
+      return true;
+    }
+
+    if (queue != null) {
+      if (same(favorites)) return 'favorites';
+      if (same(searchResults)) return 'search';
+      if (same(playlistSongsList)) {
+        return activePlaylist?.kind == 'chart' ? 'chart' : 'playlist';
+      }
+      if (same(chartSongs)) return 'chart';
+      if (same(artistSongsList)) return 'artist';
+      if (same(discover.recommended)) return 'home/recommended';
+      if (same(discover.daily)) return 'home/daily';
+      if (same(discover.hot)) return 'home/hot';
+      if (same(discover.newSongs)) return 'home/new';
+      if (same(discover.heart)) return 'home/heart';
+      if (same(discover.listen)) return 'home/listen';
+      if (same(discover.radio)) return 'home/radio';
+      if (same(homeSongs)) return 'home';
+    }
+    if (song.localPath != null && song.localPath!.isNotEmpty) return 'local';
+    return 'queue';
+  }
+
   static bool _looksUnplayable(String? message) {
     if (message == null || message.isEmpty) return false;
     final lower = message.toLowerCase();
@@ -841,7 +1353,9 @@ class AppState extends ChangeNotifier {
         message.contains('无版权') ||
         message.contains('版权') ||
         lower.contains('not available') ||
-        message.contains('不可播放');
+        message.contains('不可播放') ||
+        message.contains('无法播放') ||
+        message.contains('无法解码');
   }
 
   /// 测试/诊断用：与 [play] 的自动跳歌判定保持同一套规则。
@@ -874,7 +1388,8 @@ class AppState extends ChangeNotifier {
       _lastLightTheme = themeIndex;
     }
     notifyListeners();
-    persistSession();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   /// 设置页的深色/浅色开关：在最近一次浅色与深色主题之间切换，
@@ -892,7 +1407,8 @@ class AppState extends ChangeNotifier {
       _lastLightTheme = themeIndex;
     }
     notifyListeners();
-    persistSession();
+    bumpLyricsRevision();
+    unawaited(persistSession());
   }
 
   void signInWithToken(String token) {
@@ -906,9 +1422,13 @@ class AppState extends ChangeNotifier {
   /// 启动时恢复登录态；恢复后由调用方决定是否自动加载首页/曲库。
   Future<void> restoreSession() async {
     await local.load();
+    _savedHuaweiCredentials = await _sessionStore.readCredentials();
     final snapshot = await _sessionStore.read();
     if (snapshot == null) return;
-    if (snapshot.huaweiToken.isNotEmpty && snapshot.huaweiUserId.isNotEmpty) {
+    _lastReloginEpoch = snapshot.lastReloginEpoch;
+    var hasMusicSession =
+        snapshot.huaweiToken.isNotEmpty && snapshot.huaweiUserId.isNotEmpty;
+    if (hasMusicSession) {
       api.restoreSession(
         musicToken: snapshot.huaweiToken,
         snsUserId: snapshot.huaweiUserId,
@@ -926,29 +1446,31 @@ class AppState extends ChangeNotifier {
           ? null
           : snapshot.huaweiMemberLabel;
       api.isMember = snapshot.huaweiIsMember;
-      if (api.gateway.session?.isExpired ?? false) {
-        // 音乐 token 过期时先尝试用账号 AT 换一次会话；换不到就明确
-        // 要求重新登录，而不是先发 5 路业务请求吃 990000。
-        final accountToken = snapshot.huaweiAccountToken;
-        if (accountToken.isEmpty) {
-          api.gateway.session = null;
-          error = '登录已过期，请重新扫码登录华为账号';
-          AppLog.add('state', '音乐会话已过期且没有账号 token');
-        } else {
-          try {
-            await api.gateway.exchangeMusicToken(accountToken);
-            AppLog.add('state', '音乐会话已过期，已用账号 token 刷新');
-            api.refreshProfile();
-          } catch (e) {
-            api.gateway.session = null;
-            error = '登录已过期，请重新扫码登录华为账号';
-            AppLog.add('state', '音乐会话刷新失败：$e');
-          }
-        }
-      } else {
-        // 后台补全真实昵称/头像/会员；失败不影响启动。
-        api.refreshProfile();
+    } else {
+      api.gateway.accountToken = snapshot.huaweiAccountToken.isEmpty
+          ? null
+          : snapshot.huaweiAccountToken;
+      api.gateway.refreshToken = snapshot.huaweiRefreshToken.isEmpty
+          ? null
+          : snapshot.huaweiRefreshToken;
+    }
+
+    final sessionExpired = hasMusicSession && !api.isLoggedIn;
+    final canRenew =
+        (api.gateway.refreshToken?.isNotEmpty ?? false) ||
+        (api.gateway.accountToken?.isNotEmpty ?? false);
+    if (sessionExpired || (!hasMusicSession && canRenew)) {
+      final renewed = await _refreshHuaweiSession();
+      hasMusicSession = renewed;
+      if (!renewed) {
+        api.gateway.session = null;
+        error = '登录已过期，请重新完成华为 OAuth 验证';
+        needsRelogin = _savedHuaweiCredentials != null;
+        AppLog.add('state', '音乐会话恢复失败，需要重新授权');
       }
+    } else if (hasMusicSession) {
+      // 后台补全真实昵称/头像/会员；失败不影响启动。
+      api.refreshProfile();
     }
     if (snapshot.neteaseMusicU.isNotEmpty) {
       netease.signInWithCookies(
@@ -964,18 +1486,57 @@ class AppState extends ChangeNotifier {
     if (snapshot.qqCookies.isNotEmpty) {
       qq.signInWithCookies(Map<String, dynamic>.from(snapshot.qqCookies));
     }
-    source = MusicSource.values.firstWhere(
-      (s) => s.name == snapshot.source,
-      orElse: () => MusicSource.huawei,
-    );
+    // 当前产品只保留华为入口；旧快照里的其它音源不再恢复为当前音源。
+    source = MusicSource.huawei;
     audio.source = source;
+    await _applyPersistedSettings(snapshot);
+    notifyListeners();
+  }
+
+  Future<void> _applyPersistedSettings(SessionSnapshot snapshot) async {
     themeIndex = snapshot.themeIndex.clamp(0, kMuyuPalettes.length - 1);
     if (palette.dark) {
       _lastDarkTheme = themeIndex;
     } else {
       _lastLightTheme = themeIndex;
     }
-    notifyListeners();
+    lyricStyle = LyricStyle(
+      align: LyricAlign
+          .values[snapshot.lyricStyleAlign.clamp(0, LyricAlign.values.length - 1)],
+      bold: snapshot.lyricStyleBold,
+      columns: snapshot.lyricStyleColumns.clamp(1, 3),
+      fontScale: snapshot.lyricStyleFontScale.clamp(0.5, 2.0),
+      font: snapshot.lyricStyleFont,
+      followCoverColor: snapshot.lyricStyleFollowCoverColor,
+    );
+    glass = ImmersiveGlass
+        .values[snapshot.glassIndex.clamp(0, ImmersiveGlass.values.length - 1)];
+    glowColor = Color(snapshot.glowColorArgb);
+    glassPress = snapshot.glassPress;
+    glassSlide = snapshot.glassSlide;
+    audio.quality = AudioQuality.values.firstWhere(
+      (quality) => quality.name == snapshot.qualityName,
+      orElse: () =>
+          AudioQuality.values[snapshot.qualityIndex.clamp(
+            0,
+            AudioQuality.values.length - 1,
+          )],
+    );
+    if (MuyuAudioController.kEffects.contains(snapshot.effect)) {
+      audio.effect = snapshot.effect;
+    }
+    final maxOffsetMs = MuyuAudioController.maxLyricOffset.inMilliseconds;
+    final offsetMs = snapshot.lyricOffsetMs.clamp(-maxOffsetMs, maxOffsetMs);
+    await audio.adjustLyricOffset(
+      Duration(milliseconds: offsetMs) - audio.lyricOffset,
+    );
+    try {
+      await audio.setVolume(snapshot.volume.clamp(0.0, 1.0).toDouble());
+    } catch (_) {
+      // 启动早期音频插件可能尚未就绪；状态值已恢复，播放时仍会应用。
+      audio.volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
+    }
+    bumpLyricsRevision();
   }
 
   /// 登录成功后落盘；凭证变化（401 自动换会话）也会回调到这里。
@@ -1000,6 +1561,23 @@ class AppState extends ChangeNotifier {
             kugou.gateway.session?.cookies ?? const <String, String>{},
         qqCookies: qq.gateway.session?.cookies ?? const <String, String>{},
         themeIndex: themeIndex,
+        autoLoginEnabled: _savedHuaweiCredentials != null,
+        lastReloginEpoch: _lastReloginEpoch,
+        volume: audio.volume,
+        effect: audio.effect,
+        qualityIndex: audio.quality.index,
+        qualityName: audio.quality.name,
+        lyricOffsetMs: audio.lyricOffset.inMilliseconds,
+        lyricStyleAlign: lyricStyle.align.index,
+        lyricStyleBold: lyricStyle.bold,
+        lyricStyleColumns: lyricStyle.columns,
+        lyricStyleFontScale: lyricStyle.fontScale,
+        lyricStyleFont: lyricStyle.font,
+        lyricStyleFollowCoverColor: lyricStyle.followCoverColor,
+        glassIndex: glass.index,
+        glowColorArgb: glowColor.toARGB32(),
+        glassPress: glassPress,
+        glassSlide: glassSlide,
       ),
     );
   }
@@ -1012,7 +1590,10 @@ class AppState extends ChangeNotifier {
     _authChangedAt = null;
     _lastForcedRefreshAt = null;
     _homeRetryBlockedUntil = null;
-    _sessionStore.clear();
+    _savedHuaweiCredentials = null;
+    needsRelogin = false;
+    _lastReloginEpoch = 0;
+    unawaited(_sessionStore.clear());
     homeSongs = <Song>[];
     favorites = <Song>[];
     playlists = <Playlist>[];
@@ -1021,6 +1602,19 @@ class AppState extends ChangeNotifier {
     activeChartId = null;
     discover = const DiscoverData();
     discoverLoaded = false;
+    searchResults = <Song>[];
+    searchArtists = <Artist>[];
+    searchAlbums = <Playlist>[];
+    searchPlaylists = <Playlist>[];
+    hasMoreSearch = false;
+    loadingMoreSearch = false;
+    searchStart = 0;
+    radioNext = '';
+    radioMore = false;
+    radioRefInfo = '';
+    radioScenario = '16';
+    radioMode = '1';
+    audio.onQueueExhausted = null;
     neteaseHome = const NeteaseHomeData();
     neteaseHomeError = null;
     neteasePlaylistOffset = 0;
@@ -1063,10 +1657,14 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
-    audio.removeListener(notifyListeners);
+    _disposed = true;
+    _sessionKeepAliveTimer?.cancel();
+    _sessionKeepAliveTimer = null;
+    audio.removeListener(_onAudioChanged);
     local.removeListener(notifyListeners);
     local.dispose();
     audio.dispose();
+    lyricsRevision.dispose();
     api.gateway.dispose();
     netease.gateway.dispose();
     kugou.gateway.dispose();

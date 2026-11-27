@@ -17,110 +17,157 @@ import 'common.dart';
 
 /// 沉浸播放页（源码事实 tinglan/cmd/music/stage.go）：
 /// - 封面模糊放大做背景
-/// - 两栏（左封面 / 右逐字歌词），窄屏上下
+/// - 宽屏左封面 / 右逐字歌词；竖屏用 PageView 在封面页与歌词页间切换
 /// - 逐字卡拉OK：当前行先画 accent 42% 底，再 clip 叠加已唱部分（accent 全亮），
-///   已唱宽度用 smootherstep 在字间连续推进，边缘羽化
+///   已唱宽度在字间连续推进，边缘羽化
 /// - 点击歌词行 seek
-class ImmersivePlayer extends StatelessWidget {
+class ImmersivePlayer extends StatefulWidget {
   const ImmersivePlayer({super.key, required this.state});
 
   final AppState state;
+
+  @override
+  State<ImmersivePlayer> createState() => _ImmersivePlayerState();
+}
+
+class _ImmersivePlayerState extends State<ImmersivePlayer> {
+  late final PageController _pageController = PageController(initialPage: 0);
+  final ValueNotifier<int> _stagePage = ValueNotifier<int>(0);
+
+  AppState get state => widget.state;
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    _stagePage.dispose();
+    super.dispose();
+  }
+
+  void _showLyricsPage() {
+    if (!_pageController.hasClients) return;
+    _pageController.animateToPage(
+      1,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _onPageChanged(int page) {
+    if (_stagePage.value != page) _stagePage.value = page;
+  }
 
   @override
   Widget build(BuildContext context) {
     final song = state.audio.current;
     final pal = state.palette;
     final size = MediaQuery.of(context).size;
-    final wide = size.width >= 900;
+    final portrait =
+        MediaQuery.orientationOf(context) == Orientation.portrait ||
+        size.width < size.height;
     final topInset = MediaQuery.paddingOf(context).top;
-    final darkStage = state.showLyrics ||
-        pal.dark ||
-        state.playerStyle == PlayerStyle.modern ||
-        state.playerStyle == PlayerStyle.cover;
 
-    // 不在这里监听播放器进度：进度高频变化会让整页每秒重建。
-    // 歌词与进度条各自用 Ticker / ValueListenableBuilder 局部刷新。
-    return Scaffold(
-      backgroundColor: pal.base,
-      body: Stack(
-        children: [
-          // 1. 封面模糊背景
-          Positioned.fill(
-            child: _Backdrop(
-              url: song?.cover,
-              dark: darkStage,
-            ),
-          ),
-          // 2. 暗色蒙层（保证文字可读）
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                // 歌词模式必须压暗封面背景，否则浅色/高对比封面会把
-                // 白色几何歌词淹没。
-                color: darkStage
-                    ? Colors.black.withValues(
-                        alpha: state.showLyrics ? 0.72 : 0.48,
-                      )
-                    : Colors.white.withValues(alpha: 0.30),
+    return ValueListenableBuilder<int>(
+      valueListenable: _stagePage,
+      builder: (context, page, _) {
+        final onLyricsPage = portrait && page == 1;
+        final darkStage = pal.dark || onLyricsPage;
+        final stagePal = darkStage && !pal.dark ? _darkStagePalette(pal) : pal;
+
+        // 不在这里监听播放器进度：进度高频变化会让整页每秒重建。
+        // 歌词与进度条各自用 Ticker / ValueListenableBuilder 局部刷新。
+        return Scaffold(
+          backgroundColor: stagePal.base,
+          body: Stack(
+            children: [
+              // 1. 封面模糊背景
+              Positioned.fill(
+                child: _Backdrop(url: song?.cover, dark: darkStage),
               ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                if (!state.immersiveFullscreen) _topBar(context, song, pal),
-                Expanded(child: _stage(context, song, pal, size, wide)),
-                if (!state.immersiveFullscreen)
-                  _BottomControls(state: state, pal: pal),
-              ],
-            ),
-          ),
-          // 沉浸模式只留播放器效果；顶部半透明安全区 + 两个轻量退出入口，
-          // 位置显式叠加 status bar 高度，绝不覆盖系统时间/日期。
-          if (state.immersiveFullscreen)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: topInset + 64,
-              child: IgnorePointer(
+              // 2. 蒙层：歌词页更暗，保证文字可读。
+              Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Colors.black.withValues(alpha: 0.38),
-                        Colors.transparent,
-                      ],
-                    ),
+                    color: darkStage
+                        ? Colors.black.withValues(
+                            alpha: onLyricsPage ? 0.72 : 0.48,
+                          )
+                        : Colors.white.withValues(alpha: 0.30),
                   ),
                 ),
               ),
-            ),
-          if (state.immersiveFullscreen)
-            Positioned(
-              top: topInset + 8,
-              right: 12,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _immersiveButton(
-                    icon: Icons.keyboard_arrow_down,
-                    tooltip: '退出全屏播放',
-                    onPressed: _closePlayer,
-                  ),
-                  const SizedBox(width: 6),
-                  _immersiveButton(
-                    icon: Icons.fullscreen_exit,
-                    tooltip: '退出全屏沉浸',
-                    onPressed: state.toggleImmersiveFullscreen,
-                  ),
-                ],
+              SafeArea(
+                child: Column(
+                  children: [
+                    if (!state.immersiveFullscreen)
+                      _topBar(
+                        context,
+                        song,
+                        stagePal,
+                        portrait: portrait,
+                        page: page,
+                      ),
+                    Expanded(
+                      child: _stage(
+                        context,
+                        song,
+                        stagePal,
+                        size,
+                        portrait: portrait,
+                      ),
+                    ),
+                    if (!state.immersiveFullscreen)
+                      _BottomControls(state: state, pal: stagePal),
+                  ],
+                ),
               ),
-            ),
-        ],
-      ),
+              // 沉浸模式只留播放器效果；顶部半透明安全区 + 两个轻量退出入口，
+              // 位置显式叠加 status bar 高度，绝不覆盖系统时间/日期。
+              if (state.immersiveFullscreen)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: topInset + 64,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: <Color>[
+                            Colors.black.withValues(alpha: 0.38),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (state.immersiveFullscreen)
+                Positioned(
+                  top: topInset + 8,
+                  right: 12,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _immersiveButton(
+                        icon: Icons.keyboard_arrow_down,
+                        tooltip: '退出全屏播放',
+                        onPressed: _closePlayer,
+                      ),
+                      const SizedBox(width: 6),
+                      _immersiveButton(
+                        icon: Icons.fullscreen_exit,
+                        tooltip: '退出全屏沉浸',
+                        onPressed: state.toggleImmersiveFullscreen,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -148,84 +195,68 @@ class ImmersivePlayer extends StatelessWidget {
     state.closeFullPlayer();
   }
 
-  /// 舞台：按播放器样式分派（REA 4 种样式）。
+  /// 经典播放器舞台：竖屏双页，宽屏左封面右歌词。
   Widget _stage(
     BuildContext context,
     Song? song,
     MuyuPalette pal,
-    Size size,
-    bool wide,
-  ) {
-    // 统一全屏播放器只渲染当前选中的 playerStyle；showLyrics 只控制
-    // 背景明暗/强调，不再切换成另一套歌词皮肤或独立歌词层。
-    late final Widget stage;
-    switch (state.playerStyle) {
-      case PlayerStyle.modern:
-        // 新版：沐语标志性 sonnet 几何艺术字歌词铺满屏幕 + 小尺寸黑胶封面。
-        stage = Stack(
-          children: [
-            SonnetLyrics(state: state, pal: pal),
-            if (song != null)
-              Positioned(
-                left: 18,
-                top: 8,
-                child: VinylCover(
-                  url: song.cover,
-                  size: 86,
+    Size size, {
+    required bool portrait,
+  }) {
+    final classic = portrait
+        ? PageView(
+            key: const ValueKey<String>('immersive-portrait-pages'),
+            controller: _pageController,
+            onPageChanged: _onPageChanged,
+            children: [
+              KeyedSubtree(
+                key: const ValueKey<String>('immersive-cover-page'),
+                child: _PortraitCoverPage(
+                  state: state,
+                  song: song,
+                  pal: pal,
+                  onTap: _showLyricsPage,
+                ),
+              ),
+              KeyedSubtree(
+                key: const ValueKey<String>('immersive-lyrics-page'),
+                child: _LyricSide(state: state, pal: pal),
+              ),
+            ],
+          )
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(width: size.width * 0.06),
+              SizedBox(
+                width: math.min(size.width * 0.34, 420),
+                child: _CoverSide(
+                  state: state,
+                  song: song,
+                  pal: pal,
                   spinning: state.audio.playing,
                 ),
               ),
-          ],
-        );
-      case PlayerStyle.cover:
-        // 封面沉浸：大图铺底 + 歌词悬浮。
-        stage = Stack(
-          children: [
-            if (song?.cover != null)
-              Positioned.fill(child: _Backdrop(url: song!.cover, dark: true)),
-            _LyricSide(state: state, pal: pal),
-          ],
-        );
-      case PlayerStyle.classic:
-        // 经典：左封面右歌词（窄屏上下）。
-        stage = wide
-            ? Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  SizedBox(width: size.width * 0.06),
-                  SizedBox(
-                    width: math.min(size.width * 0.34, 420),
-                    child: _CoverSide(
-                      state: state,
-                      song: song,
-                      pal: pal,
-                      spinning: state.audio.playing,
-                    ),
-                  ),
-                  const SizedBox(width: 48),
-                  Expanded(
-                    child: _LyricSide(state: state, pal: pal),
-                  ),
-                  SizedBox(width: size.width * 0.05),
-                ],
-              )
-            : _NarrowLyrics(state: state, song: song, pal: pal);
-      case PlayerStyle.minimal:
-        // 简洁：只有居中歌词，无封面。
-        stage = Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: _LyricSide(state: state, pal: pal),
-          ),
-        );
-    }
+              const SizedBox(width: 48),
+              Expanded(
+                child: _LyricSide(state: state, pal: pal),
+              ),
+              SizedBox(width: size.width * 0.05),
+            ],
+          );
     return KeyedSubtree(
-      key: ValueKey<String>('immersive-stage-${state.playerStyle.name}'),
-      child: stage,
+      key: const ValueKey<String>('immersive-stage-classic'),
+      child: classic,
     );
   }
 
-  Widget _topBar(BuildContext context, Song? song, MuyuPalette pal) {
+  Widget _topBar(
+    BuildContext context,
+    Song? song,
+    MuyuPalette pal, {
+    required bool portrait,
+    required int page,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -253,24 +284,19 @@ class ImmersivePlayer extends StatelessWidget {
                     maxLines: 1,
                     style: TextStyle(fontSize: 11, color: pal.muted),
                   ),
+                if (portrait)
+                  Text(
+                    page == 0 ? '封面 · 轻点封面或右滑查看歌词' : '歌词 · 左滑返回封面',
+                    key: ValueKey<String>('immersive-page-hint-$page'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: pal.muted.withValues(alpha: 0.9),
+                    ),
+                  ),
               ],
             ),
-          ),
-          IconButton(
-            icon: Icon(
-              state.showLyrics ? Icons.album_outlined : Icons.lyrics_outlined,
-              color: pal.text,
-            ),
-            onPressed: () {
-              state.showLyrics = !state.showLyrics;
-              state.refresh();
-            },
-            tooltip: state.showLyrics ? '封面播放页' : '歌词页',
-          ),
-          IconButton(
-            icon: Icon(Icons.style_outlined, color: pal.text),
-            onPressed: () => _showPlayerStylePanel(context, pal),
-            tooltip: '播放器样式',
           ),
           IconButton(
             icon: Icon(
@@ -293,47 +319,6 @@ class ImmersivePlayer extends StatelessWidget {
             tooltip: '音质与音效',
           ),
         ],
-      ),
-    );
-  }
-
-  void _showPlayerStylePanel(BuildContext context, MuyuPalette pal) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: pal.surface,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                '播放器样式',
-                style: TextStyle(fontWeight: FontWeight.w700, color: pal.text),
-              ),
-            ),
-            ...PlayerStyle.values.map(
-              (s) => ListTile(
-                leading: Icon(
-                  state.playerStyle == s
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  color: pal.accent,
-                ),
-                title: Text(s.label, style: TextStyle(color: pal.text)),
-                subtitle: Text(
-                  s.desc,
-                  style: TextStyle(color: pal.muted, fontSize: 11),
-                ),
-                onTap: () {
-                  state.setPlayerStyle(s);
-                  Navigator.pop(context);
-                },
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
-        ),
       ),
     );
   }
@@ -455,54 +440,90 @@ class ImmersivePlayer extends StatelessWidget {
                       state.updateLyricStyle(st.copyWith(followCoverColor: v)),
                 ),
               ),
-              StatefulBuilder(
-                builder: (context, setSheetState) {
-                  final audio = state.audio;
-                  final offsetMs = audio.lyricOffset.inMilliseconds;
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(Icons.sync, color: pal.accent),
-                    title: Text('歌词同步', style: TextStyle(color: pal.text)),
-                    subtitle: Text(
-                      offsetMs == 0
-                          ? '无偏移 · 点 +/- 每次校准 100ms'
-                          : '当前偏移 ${offsetMs > 0 ? '+' : ''}$offsetMs ms',
-                      style: TextStyle(color: pal.muted, fontSize: 11),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
+              ValueListenableBuilder<int>(
+                valueListenable: state.lyricsRevision,
+                builder: (context, _, _) => StatefulBuilder(
+                  builder: (context, setSheetState) {
+                    final offsetMs = state.audio.lyricOffset.inMilliseconds
+                        .clamp(-5000, 5000);
+                    final seconds = (offsetMs / 1000).toStringAsFixed(2);
+                    final signedSeconds = offsetMs > 0 ? '+$seconds' : seconds;
+                    final label = offsetMs == 0
+                        ? '无偏移 · 拖动滑块或点 +/- 校准 100ms'
+                        : '当前偏移 ${offsetMs > 0 ? '+' : ''}$offsetMs ms'
+                              '（$signedSeconds 秒）';
+                    return Column(
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.remove, size: 18),
-                          tooltip: '歌词延后 100ms',
-                          onPressed: () {
-                            audio.adjustLyricOffset(
-                              const Duration(milliseconds: -100),
-                            );
-                            setSheetState(() {});
-                          },
+                        ListTile(
+                          dense: true,
+                          leading: Icon(Icons.sync, color: pal.accent),
+                          title: Text(
+                            '歌词同步',
+                            style: TextStyle(color: pal.text),
+                          ),
+                          subtitle: Text(
+                            label,
+                            style: TextStyle(color: pal.muted, fontSize: 11),
+                          ),
                         ),
-                        TextButton(
-                          onPressed: () {
-                            audio.resetLyricOffset();
-                            setSheetState(() {});
-                          },
-                          child: const Text('重置'),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Slider(
+                            key: const ValueKey<String>('lyric-offset-slider'),
+                            value: offsetMs.toDouble(),
+                            min: -5000,
+                            max: 5000,
+                            divisions: 100,
+                            label: offsetMs == 0
+                                ? '0 ms'
+                                : '${offsetMs > 0 ? '+' : ''}$offsetMs ms',
+                            onChanged: (value) {
+                              state.setLyricOffset(
+                                Duration(milliseconds: value.round()),
+                              );
+                              setSheetState(() {});
+                            },
+                          ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.add, size: 18),
-                          tooltip: '歌词提前 100ms',
-                          onPressed: () {
-                            audio.adjustLyricOffset(
-                              const Duration(milliseconds: 100),
-                            );
-                            setSheetState(() {});
-                          },
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.remove, size: 18),
+                              tooltip: '歌词延后 100ms',
+                              onPressed: () {
+                                state.setLyricOffset(
+                                  state.audio.lyricOffset -
+                                      const Duration(milliseconds: 100),
+                                );
+                                setSheetState(() {});
+                              },
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                state.resetLyricOffset();
+                                setSheetState(() {});
+                              },
+                              child: const Text('重置'),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.add, size: 18),
+                              tooltip: '歌词提前 100ms',
+                              onPressed: () {
+                                state.setLyricOffset(
+                                  state.audio.lyricOffset +
+                                      const Duration(milliseconds: 100),
+                                );
+                                setSheetState(() {});
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                          ],
                         ),
                       ],
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -536,7 +557,7 @@ class ImmersivePlayer extends StatelessWidget {
                 ),
                 title: Text(q.label, style: TextStyle(color: pal.text)),
                 onTap: () {
-                  state.audio.setQuality(q);
+                  state.setQuality(q);
                   Navigator.pop(context);
                 },
               ),
@@ -566,7 +587,7 @@ class ImmersivePlayer extends StatelessWidget {
                   size: 18,
                 ),
                 title: Text(e, style: TextStyle(color: pal.text, fontSize: 13)),
-                onTap: () => state.audio.setEffect(e),
+                onTap: () => state.setEffect(e),
               ),
             ),
             const Divider(),
@@ -635,6 +656,59 @@ class ImmersivePlayer extends StatelessWidget {
   }
 }
 
+/// 浅色主题进入暗色歌词页时只替换前景/表面色，强调色仍跟随用户主题。
+MuyuPalette _darkStagePalette(MuyuPalette pal) => MuyuPalette(
+  name: pal.name,
+  label: pal.label,
+  base: const Color(0xFF0D0D10),
+  surface: const Color(0xFF141418),
+  text: Colors.white,
+  secondary: Colors.white70,
+  muted: Colors.white60,
+  accent: pal.accent,
+  dark: true,
+);
+
+/// 竖屏封面页：唯一进入歌词页的显式入口是点击封面本身。
+class _PortraitCoverPage extends StatelessWidget {
+  const _PortraitCoverPage({
+    required this.state,
+    required this.song,
+    required this.pal,
+    required this.onTap,
+  });
+
+  final AppState state;
+  final Song? song;
+  final MuyuPalette pal;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = math.min(constraints.maxWidth * 0.82, 420.0);
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: SizedBox(
+              width: width,
+              child: _CoverSide(
+                state: state,
+                song: song,
+                pal: pal,
+                spinning: state.audio.playing,
+                maxHeight: constraints.maxHeight,
+                onTap: onTap,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// 模糊封面背景。
 class _Backdrop extends StatelessWidget {
   const _Backdrop({required this.url, required this.dark});
@@ -681,6 +755,7 @@ class _CoverSide extends StatefulWidget {
     required this.pal,
     required this.spinning,
     this.maxHeight,
+    this.onTap,
   });
   final AppState state;
   final Song? song;
@@ -689,6 +764,9 @@ class _CoverSide extends StatefulWidget {
 
   /// 窄屏时由父级限制封面高度，避免 Column 溢出。
   final double? maxHeight;
+
+  /// 竖屏点封面进入歌词页；宽屏不传。
+  final VoidCallback? onTap;
 
   @override
   State<_CoverSide> createState() => _CoverSideState();
@@ -739,77 +817,101 @@ class _CoverSideState extends State<_CoverSide> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    var side = math.min(MediaQuery.of(context).size.height * 0.5, 420.0);
-    if (widget.maxHeight != null) {
-      // 文字区约需 90px，封面本体不超过剩余高度。
-      side = math.min(side, math.max(60.0, widget.maxHeight! - 92));
-    }
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        AspectRatio(
-          aspectRatio: 1,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: widget.state.glassPress ? (_) => _press.forward() : null,
-            onTapUp: widget.state.glassPress ? (_) => _press.reverse() : null,
-            onTapCancel: widget.state.glassPress
-                ? () => _press.reverse()
-                : null,
-            child: AnimatedBuilder(
-              animation: _press,
-              builder: (context, child) {
-                final t = Curves.easeOutCubic.transform(_press.value);
-                return Transform.scale(scale: 1.0 - 0.018 * t, child: child);
-              },
-              child: ClipOval(
-                child: CustomPaint(
-                  foregroundPainter: _SheenPainter(
-                    animation: _sheen,
-                    color: widget.state.glowColor,
-                    enabled: _shouldAnimateSheen,
-                  ),
-                  child: VinylCover(
-                    url: widget.song?.cover,
-                    size: side,
-                    spinning: widget.spinning,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        var side = math.min(MediaQuery.of(context).size.height * 0.5, 420.0);
+        if (constraints.maxWidth.isFinite) {
+          side = math.min(side, constraints.maxWidth);
+        }
+        if (constraints.maxHeight.isFinite) {
+          // 封面下方还有歌名/歌手/专辑，约需 92px；不管横竖屏都必须
+          // 把封面本体压进剩余高度，否则 1200x900 的经典布局也会溢出。
+          side = math.min(side, math.max(60.0, constraints.maxHeight - 92));
+        }
+        if (widget.maxHeight != null) {
+          // 文字区约需 90px，封面本体不超过剩余高度。
+          side = math.min(side, math.max(60.0, widget.maxHeight! - 92));
+        }
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: side,
+              height: side,
+              child: AspectRatio(
+                aspectRatio: 1,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onTap,
+                  onTapDown: widget.state.glassPress
+                      ? (_) => _press.forward()
+                      : null,
+                  onTapUp: widget.state.glassPress
+                      ? (_) => _press.reverse()
+                      : null,
+                  onTapCancel: widget.state.glassPress
+                      ? () => _press.reverse()
+                      : null,
+                  child: AnimatedBuilder(
+                    animation: _press,
+                    builder: (context, child) {
+                      final t = Curves.easeOutCubic.transform(_press.value);
+                      return Transform.scale(
+                        scale: 1.0 - 0.018 * t,
+                        child: child,
+                      );
+                    },
+                    child: ClipOval(
+                      child: CustomPaint(
+                        foregroundPainter: _SheenPainter(
+                          animation: _sheen,
+                          color: widget.state.glowColor,
+                          enabled: _shouldAnimateSheen,
+                        ),
+                        child: VinylCover(
+                          url: widget.song?.cover,
+                          size: side,
+                          spinning: widget.spinning,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ),
-        const SizedBox(height: 28),
-        Text(
-          widget.song?.name ?? '未在播放',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w700,
-            color: widget.pal.text,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          widget.song?.artistText ?? '',
-          style: TextStyle(
-            fontSize: 13,
-            color: widget.pal.text.withValues(alpha: 0.62),
-          ),
-        ),
-        if (widget.song?.album != null && widget.song!.album.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              widget.song!.album,
+            const SizedBox(height: 28),
+            Text(
+              widget.song?.name ?? '未在播放',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 11,
-                color: widget.pal.text.withValues(alpha: 0.4),
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                color: widget.pal.text,
               ),
             ),
-          ),
-      ],
+            const SizedBox(height: 8),
+            Text(
+              widget.song?.artistText ?? '',
+              style: TextStyle(
+                fontSize: 13,
+                color: widget.pal.text.withValues(alpha: 0.62),
+              ),
+            ),
+            if (widget.song?.album != null && widget.song!.album.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  widget.song!.album,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: widget.pal.text.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -943,16 +1045,22 @@ class _LyricSideState extends State<_LyricSide> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final lines = widget.state.lyrics;
-    return LyricFocusList(
-      key: ValueKey<String>('lyrics:${_songId ?? ''}'),
-      songId: _songId,
-      lines: lines,
-      position: _displayPosition,
-      pal: widget.pal,
-      onLineTap: (i) {
-        if (i >= 0 && i < lines.length) {
-          widget.state.audio.seek(lines[i].time);
-        }
+    return ValueListenableBuilder<int>(
+      valueListenable: widget.state.lyricsRevision,
+      builder: (context, revision, _) {
+        final songId = widget.state.audio.current?.id ?? _songId;
+        return LyricFocusList(
+          key: ValueKey<String>('lyrics:${songId ?? ''}:$revision'),
+          songId: songId,
+          lines: lines,
+          position: _displayPosition,
+          pal: widget.pal,
+          onLineTap: (i) {
+            if (i >= 0 && i < lines.length) {
+              widget.state.audio.seek(lines[i].time);
+            }
+          },
+        );
       },
     );
   }
@@ -1429,45 +1537,6 @@ class _KaraokePainter extends CustomPainter {
   }
 }
 
-/// 窄屏播放页：封面在上、歌词在下。
-class _NarrowLyrics extends StatelessWidget {
-  const _NarrowLyrics({
-    required this.state,
-    required this.song,
-    required this.pal,
-  });
-  final AppState state;
-  final Song? song;
-  final MuyuPalette pal;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        SizedBox(
-          height: 180,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: SizedBox(
-              width: 320,
-              child: _CoverSide(
-                state: state,
-                song: song,
-                pal: pal,
-                spinning: state.audio.playing,
-                maxHeight: 180,
-              ),
-            ),
-          ),
-        ),
-        Expanded(
-          child: _LyricSide(state: state, pal: pal),
-        ),
-      ],
-    );
-  }
-}
-
 /// 底部播放控制（源码 stage.go paintTransport，锚点在收起/展开两态不变）。
 class _BottomControls extends StatelessWidget {
   const _BottomControls({required this.state, required this.pal});
@@ -1541,11 +1610,81 @@ class _BottomControls extends StatelessWidget {
                   audio.volume == 0 ? Icons.volume_off : Icons.volume_up,
                   color: pal.text,
                 ),
-                onPressed: () => audio.setVolume(audio.volume == 0 ? 1.0 : 0.0),
+                tooltip: '音量',
+                onPressed: () => _showVolumeSheet(context),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  void _showVolumeSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: pal.surface,
+      builder: (sheetContext) => SafeArea(
+        child: AnimatedBuilder(
+          animation: state.audio,
+          builder: (context, _) {
+            final volume = state.audio.volume.clamp(0.0, 1.0);
+            final muted = volume == 0;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '音量',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: pal.text,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: muted ? '取消静音' : '静音',
+                        icon: Icon(
+                          muted ? Icons.volume_off : Icons.volume_up,
+                          color: pal.text,
+                        ),
+                        onPressed: () => state.setVolume(muted ? 1.0 : 0.0),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          key: const ValueKey<String>('volume-slider'),
+                          value: volume,
+                          min: 0,
+                          max: 1,
+                          divisions: 100,
+                          label: '${(volume * 100).round()}%',
+                          onChanged: (value) => state.setVolume(value),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 44,
+                        child: Text(
+                          '${(volume * 100).round()}%',
+                          key: const ValueKey<String>('volume-percent'),
+                          textAlign: TextAlign.right,
+                          style: TextStyle(fontSize: 12, color: pal.muted),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '拖动滑块调整音量，不会误触静音',
+                    style: TextStyle(fontSize: 11, color: pal.muted),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

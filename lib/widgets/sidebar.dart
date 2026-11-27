@@ -4,7 +4,7 @@ import '../services/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
 
-/// 左侧栏：截图里的用户区 / 主页 / 音乐厅 / 唱片架 / 我的 /
+/// 左侧栏：华为音乐单账号 + 主页 / 音乐厅 / 唱片架 / 我的 /
 /// 自定义入口 / 本地音乐。选中项有蓝色竖条与浅蓝底。
 class Sidebar extends StatelessWidget {
   const Sidebar({
@@ -57,16 +57,17 @@ class Sidebar extends StatelessWidget {
 
   Widget _userHeader() {
     final pal = state.palette;
-    final loggedIn = state.isLoggedIn;
-    final name = loggedIn ? state.accountName : '登录华为音乐';
-    final avatar = state.accountAvatar;
-    final member = state.accountMemberLabel;
-    final subtitle =
-        loggedIn ? (member.isNotEmpty ? member : '华为音乐账号') : '点击登录华为账号';
+    // 侧栏固定读取华为账号，不跟随底层多平台 source 状态显示其他账号。
+    final loggedIn = state.api.isLoggedIn;
+    final name = loggedIn
+        ? (state.api.displayName ?? '华为音乐用户')
+        : '登录华为音乐';
+    final avatar = state.api.avatarUrl ?? '';
+    const subtitle = '华为音乐账号';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Tooltip(
-        message: loggedIn ? '账号与切换' : '登录华为音乐',
+        message: loggedIn ? '华为音乐账号' : '登录华为音乐',
         child: Material(
           color: Colors.transparent,
           borderRadius: BorderRadius.circular(10),

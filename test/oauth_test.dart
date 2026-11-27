@@ -158,4 +158,84 @@ void main() {
     expect(restored.huaweiRefreshToken, 'refresh-token');
     expect(restored.huaweiExpireTime, '2026-12-01T00:00:00Z');
   });
+
+  test('refresh_token 表单字段正确，并解析轮换后的 refresh_token', () async {
+    Uri? calledUri;
+    Map<String, String>? calledForm;
+    final pair = await refreshAccessToken(
+      'old-refresh',
+      sender: (uri, form) async {
+        calledUri = uri;
+        calledForm = form;
+        return OAuthTokenResponse(
+          statusCode: 200,
+          body: jsonEncode(<String, dynamic>{
+            'access_token': 'new-account-access',
+            'refresh_token': 'rotated-refresh',
+            'expires_in': 3600,
+          }),
+        );
+      },
+    );
+
+    expect(calledUri?.scheme, 'https');
+    expect(calledUri?.host, HuaweiPaths.tokenHost);
+    expect(calledUri?.path, HuaweiPaths.tokenPath);
+    expect(calledForm?['grant_type'], 'refresh_token');
+    expect(calledForm?['client_id'], HuaweiPaths.clientId);
+    expect(calledForm?['refresh_token'], 'old-refresh');
+    expect(pair.accessToken, 'new-account-access');
+    expect(pair.refreshToken, 'rotated-refresh');
+  });
+
+  test('refresh 响应未轮换时沿用旧 refresh_token，错误码不吞掉', () async {
+    final pair = await refreshAccessToken(
+      'keep-refresh',
+      sender: (_, _) async => OAuthTokenResponse(
+        statusCode: 200,
+        body: jsonEncode(<String, dynamic>{'access_token': 'new-access'}),
+      ),
+    );
+    expect(pair.refreshToken, 'keep-refresh');
+
+    await expectLater(
+      refreshAccessToken(
+        'bad-refresh',
+        sender: (_, _) async => OAuthTokenResponse(
+          statusCode: 400,
+          body: jsonEncode(<String, dynamic>{
+            'error': 'invalid_grant',
+            'error_description': 'refresh token expired',
+          }),
+        ),
+      ),
+      throwsA(
+        isA<HuaweiException>().having(
+          (error) => error.toString(),
+          'message',
+          allOf(contains('HTTP 400'), contains('invalid_grant')),
+        ),
+      ),
+    );
+
+    await expectLater(
+      refreshAccessToken(
+        'bad-refresh',
+        sender: (_, _) async => OAuthTokenResponse(
+          statusCode: 200,
+          body: jsonEncode(<String, dynamic>{
+            'error': 'invalid_grant',
+            'error_description': 'refresh token expired',
+          }),
+        ),
+      ),
+      throwsA(
+        isA<HuaweiException>().having(
+          (error) => error.toString(),
+          'message',
+          allOf(contains('invalid_grant'), contains('refresh token expired')),
+        ),
+      ),
+    );
+  });
 }

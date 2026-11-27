@@ -50,7 +50,10 @@ void main() {
     expect(files, isNotEmpty);
     expect(files.first.url.toString(), contains('http'));
 
-    final lyrics = await api.lyrics(favorites.first.id);
+    final lyrics = await api.lyrics(
+      favorites.first.id,
+      allowPlaybackRequest: true,
+    );
     expect(lyrics, isNotEmpty);
 
     // Hi-Res 无权限时网关会给 30s 试听；必须回退到完整档位而不是试听。

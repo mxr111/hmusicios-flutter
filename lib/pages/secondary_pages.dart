@@ -41,66 +41,125 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = widget.state;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('搜索', style: MuyuTheme.title),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _controller,
-            onSubmitted: state.doSearch,
-            decoration: InputDecoration(
-              hintText: '搜索歌曲、歌手、专辑',
-              prefixIcon: const Icon(Icons.search, size: 18),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(22),
-                borderSide: BorderSide.none,
+    return AnimatedBuilder(
+      animation: widget.state,
+      builder: (context, _) {
+        final state = widget.state;
+        final hasResults =
+            state.searchResults.isNotEmpty ||
+            state.searchArtists.isNotEmpty ||
+            state.searchAlbums.isNotEmpty ||
+            state.searchPlaylists.isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 100),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('搜索', style: MuyuTheme.title),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _controller,
+                onSubmitted: state.doSearch,
+                decoration: InputDecoration(
+                  hintText: '搜索歌曲、歌手、专辑、歌单',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(22),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(height: 16),
+              if (state.loading && !hasResults)
+                const LinearProgressIndicator(minHeight: 2)
+              else if (state.error != null && !hasResults)
+                StatePanel(
+                  message: state.error!,
+                  onRetry: () => state.doSearch(_controller.text),
+                )
+              else if (!hasResults)
+                const Text('输入关键词开始搜索华为音乐曲库', style: MuyuTheme.muted)
+              else ...[
+                if (state.loading)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: LinearProgressIndicator(minHeight: 2),
+                  ),
+                // 加载更多失败时保留已有结果，只在上方提示错误。
+                if (state.error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: StatePanel(
+                      message: state.error!,
+                      onRetry: () => state.doSearch(_controller.text),
+                      actionLabel: '重试',
+                    ),
+                  ),
+                _resultTabs(state),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: switch (_resultTab) {
+                    1 => _artistResults(state),
+                    2 => _albumResults(state),
+                    3 => _playlistResults(state),
+                    _ => _songResults(state),
+                  },
+                ),
+                if (state.hasMoreSearch) _loadMoreBar(state),
+              ],
+            ],
           ),
-          const SizedBox(height: 16),
-          if (state.loading)
-            const LinearProgressIndicator(minHeight: 2)
-          else if (state.error != null)
-            StatePanel(
-              message: state.error!,
-              onRetry: () => state.doSearch(_controller.text),
-            )
-          else if (state.searchResults.isEmpty &&
-              state.searchArtists.isEmpty &&
-              state.searchAlbums.isEmpty)
-            const Text('输入关键词开始搜索华为音乐曲库', style: MuyuTheme.muted)
-          else ...[
-            _resultTabs(state),
-            const SizedBox(height: 12),
-            Expanded(
-              child: switch (_resultTab) {
-                1 => _artistResults(state),
-                2 => _albumResults(state),
-                _ => _songResults(state),
-              },
-            ),
-          ],
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _resultTabs(AppState state) {
-    return Row(
-      children: [
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: <Widget>[
         _tabChip('歌曲 ${state.searchResults.length}', 0),
-        const SizedBox(width: 8),
         _tabChip('歌手 ${state.searchArtists.length}', 1),
-        const SizedBox(width: 8),
         _tabChip('专辑 ${state.searchAlbums.length}', 2),
+        _tabChip('歌单 ${state.searchPlaylists.length}', 3),
       ],
     );
+  }
+
+  /// 搜索分页只由用户显式点击「加载下一页」触发，不做无限滚动。
+  Widget _loadMoreBar(AppState state) {
+    final loading = state.loadingMoreSearch;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Center(
+        child: FilledButton.tonalIcon(
+          key: const ValueKey<String>('search-load-more'),
+          onPressed: loading ? null : _loadMoreSearch,
+          icon: loading
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.expand_more, size: 18),
+          label: Text(loading ? '正在加载下一页…' : '加载下一页'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadMoreSearch() async {
+    final state = widget.state;
+    await state.loadMoreSearch();
+    if (!mounted) return;
+    final message = state.error;
+    if (message == null || message.isEmpty) return;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('加载下一页失败：$message')));
   }
 
   Widget _tabChip(String label, int index) {
@@ -125,19 +184,13 @@ class _SearchPageState extends State<SearchPage> {
     if (state.searchResults.isEmpty) {
       return const StatePanel(message: '搜索接口未返回歌曲。');
     }
-    return ListView.builder(
-      itemCount: state.searchResults.length,
-      itemBuilder: (context, i) {
-        final song = state.searchResults[i];
-        return SongRow(
-          song: song,
-          index: i,
-          onPlay: () =>
-              playSongFromList(context, state, song, state.searchResults),
-          onFavorite: () => state.toggleFavorite(song),
-          onArtistTap: () => state.openArtistFromSong(song),
-        );
-      },
+    final songs = state.searchResults;
+    return PaginatedSongList(
+      songs: songs,
+      resetKey: state.searchKeyword,
+      onPlay: (song) => playSongFromList(context, state, song, songs),
+      onFavorite: state.toggleFavorite,
+      onArtistTap: state.openArtistFromSong,
     );
   }
 
@@ -145,14 +198,20 @@ class _SearchPageState extends State<SearchPage> {
     if (state.searchArtists.isEmpty) {
       return const StatePanel(message: '该搜索接口暂未返回歌手结果；可先搜索歌曲，再从歌曲行进入歌手。');
     }
-    return ListView.separated(
-      itemCount: state.searchArtists.length,
+    final artists = state.searchArtists;
+    return PaginatedList<Artist>(
+      items: artists,
+      resetKey: state.searchKeyword,
       separatorBuilder: (_, _) => Divider(height: 1, color: MuyuColors.divider),
-      itemBuilder: (context, i) {
-        final artist = state.searchArtists[i];
+      itemBuilder: (context, index, artist) {
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(vertical: 4),
-          leading: CoverArt(url: artist.cover, size: 46, circle: true, seed: i),
+          leading: CoverArt(
+            url: artist.cover,
+            size: 46,
+            circle: true,
+            seed: index,
+          ),
           title: Text(artist.name, style: MuyuTheme.body),
           subtitle: artist.desc.isEmpty
               ? null
@@ -173,16 +232,16 @@ class _SearchPageState extends State<SearchPage> {
     if (state.searchAlbums.isEmpty) {
       return const StatePanel(message: '该搜索接口暂未返回专辑结果。');
     }
-    return GridView.builder(
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : 3,
-        childAspectRatio: 0.82,
-        mainAxisSpacing: 14,
-        crossAxisSpacing: 14,
-      ),
-      itemCount: state.searchAlbums.length,
-      itemBuilder: (context, i) {
-        final album = state.searchAlbums[i];
+    final albums = state.searchAlbums;
+    return PaginatedGrid<Playlist>(
+      items: albums,
+      pageSize: 15,
+      crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : 3,
+      childAspectRatio: 0.82,
+      mainAxisSpacing: 14,
+      crossAxisSpacing: 14,
+      resetKey: state.searchKeyword,
+      itemBuilder: (context, index, album) {
         return GestureDetector(
           onTap: () => state.openPlaylist(album),
           child: Column(
@@ -194,7 +253,7 @@ class _SearchPageState extends State<SearchPage> {
                     url: album.cover,
                     size: box.maxWidth,
                     radius: 12,
-                    seed: i,
+                    seed: index,
                   ),
                 ),
               ),
@@ -209,6 +268,59 @@ class _SearchPageState extends State<SearchPage> {
                 ),
               ),
               Text('${album.songCount} 首', style: MuyuTheme.muted),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 搜索歌单：与歌曲/歌手/专辑一样只渲染当前页，点卡片打开歌单详情。
+  Widget _playlistResults(AppState state) {
+    if (state.searchPlaylists.isEmpty) {
+      return const StatePanel(message: '该搜索接口暂未返回歌单结果。');
+    }
+    final playlists = state.searchPlaylists;
+    return PaginatedGrid<Playlist>(
+      items: playlists,
+      pageSize: 12,
+      crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : 3,
+      childAspectRatio: 0.82,
+      mainAxisSpacing: 14,
+      crossAxisSpacing: 14,
+      resetKey: state.searchKeyword,
+      itemBuilder: (context, index, playlist) {
+        return GestureDetector(
+          onTap: () => state.openPlaylist(playlist),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, box) => CoverArt(
+                    url: playlist.cover,
+                    size: box.maxWidth,
+                    radius: 12,
+                    seed: index,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                playlist.name.isEmpty ? '未命名歌单' : playlist.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                playlist.songCount > 0
+                    ? '${playlist.songCount} 首'
+                    : '点击打开歌单',
+                style: MuyuTheme.muted,
+              ),
             ],
           ),
         );
@@ -259,15 +371,15 @@ class ShelfPage extends StatelessWidget {
             onRetry: state.loadLibrary,
             actionLabel: '重试',
           ),
-        GridView.count(
+        PaginatedGrid<Playlist>(
+          items: playlists,
+          pageSize: 15,
           shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
           crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : 3,
           childAspectRatio: 0.86,
           mainAxisSpacing: 16,
           crossAxisSpacing: 16,
-          children: List<Widget>.generate(playlists.length, (i) {
-            final p = playlists[i];
+          itemBuilder: (context, index, p) {
             return GestureDetector(
               onTap: () => state.openPlaylist(p),
               child: Column(
@@ -280,7 +392,7 @@ class ShelfPage extends StatelessWidget {
                           ? Container(
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
-                                  colors: i.isEven
+                                  colors: index.isEven
                                       ? MuyuColors.cardDaily
                                       : MuyuColors.cardHot,
                                 ),
@@ -315,7 +427,7 @@ class ShelfPage extends StatelessWidget {
                 ],
               ),
             );
-          }),
+          },
         ),
       ],
     );
@@ -459,13 +571,7 @@ class MinePage extends StatelessWidget {
           ),
         const SizedBox(height: 12),
         if (state.favoriteFilter == null) ...[
-          Row(
-            children: [
-              const Text('收藏', style: MuyuTheme.section),
-              const Spacer(),
-              Text('按平台查看', style: MuyuTheme.muted),
-            ],
-          ),
+          const Text('收藏', style: MuyuTheme.section),
           const SizedBox(height: 12),
           _favoritesGrid(context, favs),
         ] else ...[
@@ -481,12 +587,8 @@ class MinePage extends StatelessWidget {
     for (final s in favs) {
       bySource.putIfAbsent(s.source, () => <Song>[]).add(s);
     }
-    // 即使某平台为空也显示卡片（与沐语一致：华为/网易云各一张收藏卡）。
-    final sources = <MusicSourceLabel>{
-      MusicSourceLabel.huawei,
-      MusicSourceLabel.netease,
-      ...bySource.keys,
-    }.toList();
+    // 当前产品只展示华为收藏入口，不再预置其它音源卡片。
+    const sources = <MusicSourceLabel>[MusicSourceLabel.huawei];
 
     return GridView.count(
       shrinkWrap: true,
@@ -561,109 +663,122 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pal = state.palette;
-    return Scaffold(
-      backgroundColor: pal.base,
-      appBar: AppBar(
-        title: Text('设置', style: TextStyle(color: pal.text)),
-        backgroundColor: Colors.transparent,
-        foregroundColor: pal.text,
-        elevation: 0,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-        children: [
-          _card(
-            '默认音质',
-            DropdownButton<AudioQuality>(
-              value: state.audio.quality,
-              underline: const SizedBox.shrink(),
-              items: AudioQuality.values
-                  .map(
-                    (q) => DropdownMenuItem<AudioQuality>(
-                      value: q,
-                      child: Text(q.label),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (q) {
-                if (q != null) state.audio.setQuality(q);
-              },
-            ),
+    return AnimatedBuilder(
+      animation: state,
+      builder: (context, _) {
+        final pal = state.palette;
+        return Scaffold(
+          backgroundColor: pal.base,
+          appBar: AppBar(
+            title: Text('设置', style: TextStyle(color: pal.text)),
+            backgroundColor: Colors.transparent,
+            foregroundColor: pal.text,
+            elevation: 0,
           ),
-          _card(
-            '深色主题',
-            Switch(
-              value: state.darkMode,
-              onChanged: (_) => state.toggleDarkMode(),
-            ),
-          ),
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            leading: const Icon(Icons.palette_outlined),
-            title: Text(
-              '皮肤与外观',
-              style: TextStyle(fontSize: 13, color: pal.text),
-            ),
-            subtitle: Text(
-              '主题 · 歌词样式 · 沉浸光感',
-              style: TextStyle(fontSize: 12, color: pal.muted),
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => AppearancePage(state: state),
-              ),
-            ),
-          ),
-          _card(
-            '华为账号',
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(state.isLoggedIn ? '已登录' : '未登录', style: MuyuTheme.muted),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: onLogin,
-                  child: Text(state.isLoggedIn ? '切换账号' : '登录'),
+          body: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            children: [
+              _card(
+                '默认音质',
+                DropdownButton<AudioQuality>(
+                  key: const ValueKey<String>('settings-quality'),
+                  value: state.audio.quality,
+                  underline: const SizedBox.shrink(),
+                  items: AudioQuality.values
+                      .map(
+                        (q) => DropdownMenuItem<AudioQuality>(
+                          value: q,
+                          child: Text(q.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (q) {
+                    if (q != null) state.setQuality(q);
+                  },
                 ),
-              ],
-            ),
+              ),
+              _card(
+                '深色主题',
+                Switch(
+                  key: const ValueKey<String>('settings-dark-mode'),
+                  value: state.darkMode,
+                  onChanged: (_) => state.toggleDarkMode(),
+                ),
+              ),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.palette_outlined),
+                title: Text(
+                  '皮肤与外观',
+                  style: TextStyle(fontSize: 13, color: pal.text),
+                ),
+                subtitle: Text(
+                  '主题 · 歌词样式 · 沉浸光感',
+                  style: TextStyle(fontSize: 12, color: pal.muted),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => AnimatedBuilder(
+                      animation: state,
+                      builder: (_, _) => AppearancePage(state: state),
+                    ),
+                  ),
+                ),
+              ),
+              _card(
+                '华为账号',
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      state.isLoggedIn ? '已登录' : '未登录',
+                      style: MuyuTheme.muted,
+                    ),
+                    const SizedBox(width: 12),
+                    FilledButton(
+                      onPressed: onLogin,
+                      child: Text(state.isLoggedIn ? '切换账号' : '登录'),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.bug_report_outlined),
+                title: Text(
+                  '导出日志',
+                  style: TextStyle(fontSize: 13, color: pal.text),
+                ),
+                subtitle: Text(
+                  '已记录 ${AppLog.length} 条 API / 播放 / 代理事件',
+                  style: TextStyle(fontSize: 12, color: pal.muted),
+                ),
+                trailing: const Icon(Icons.download_outlined),
+                onTap: () => _exportLogs(context),
+              ),
+              const SizedBox(height: 18),
+              const Text('关于', style: MuyuTheme.section),
+              const SizedBox(height: 8),
+              const StatePanel(
+                message:
+                    '本工程由 REA 对沐语 v1.2.0 (Muyu.exe, Go 1.27.4) 全量反编译复刻，'
+                    '仅实现华为音乐数据源。登录走内置浏览器 OAuth PKCE + loginex，'
+                    '业务请求头为 Digest（app-music-baseline + music token）。'
+                    '接口返回 401/403 时请重新扫码登录。',
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '反编译事实：module muyu.local/desktop / 222 根模块 / '
+                '私有网关 api-drcn.music.dbankcloud.cn / '
+                '发现页 columnInfoExs 三层结构 / 取流 qualityType 1(MP3)·3(FLAC) / '
+                '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
+                style: MuyuTheme.muted,
+              ),
+            ],
           ),
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            leading: const Icon(Icons.bug_report_outlined),
-            title: Text(
-              '导出日志',
-              style: TextStyle(fontSize: 13, color: pal.text),
-            ),
-            subtitle: Text(
-              '已记录 ${AppLog.length} 条 API / 播放 / 代理事件',
-              style: TextStyle(fontSize: 12, color: pal.muted),
-            ),
-            trailing: const Icon(Icons.download_outlined),
-            onTap: () => _exportLogs(context),
-          ),
-          const SizedBox(height: 18),
-          const Text('关于', style: MuyuTheme.section),
-          const SizedBox(height: 8),
-          const StatePanel(
-            message:
-                '本工程由 REA 对沐语 v1.2.0 (Muyu.exe, Go 1.27.4) 全量反编译复刻，'
-                '仅实现华为音乐数据源。登录走内置浏览器 OAuth PKCE + loginex，'
-                '业务请求头为 Digest（app-music-baseline + music token）。'
-                '接口返回 401/403 时请重新扫码登录。',
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            '反编译事实：module muyu.local/desktop / 222 根模块 + 4 音源 / '
-            '私有网关 api-drcn.music.dbankcloud.cn / '
-            '发现页 columnInfoExs 三层结构 / 取流 qualityType 1(MP3)·3(FLAC) / '
-            '逐字 HMRC 歌词 / 三态播放模式 + 8 音效 + 定时停止。',
-            style: MuyuTheme.muted,
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -742,24 +857,40 @@ class LyricsPage extends StatelessWidget {
 }
 
 /// 登录面板（tinglan 源码事实）：华为音乐走 OAuth 扫码 + PKCE，
-/// 不支持账号密码直登。主入口在应用内浏览器完成授权并自动换取音乐会话；
+/// 不支持账号密码直登。保存的账号密码只用于 OAuth 页面自动填充；
 /// 手动填入 music token + snsUserID 仅作为调试后备。
+typedef HuaweiOAuthRouteBuilder =
+    Route<bool> Function(
+      AppState state, {
+      bool autoFillCredentials,
+    });
+
 class LoginSheet extends StatefulWidget {
-  const LoginSheet({super.key, required this.state});
+  const LoginSheet({
+    super.key,
+    required this.state,
+    this.oauthRouteBuilder = huaweiOAuthRoute,
+  });
 
   final AppState state;
+  final HuaweiOAuthRouteBuilder oauthRouteBuilder;
 
   @override
   State<LoginSheet> createState() => _LoginSheetState();
 }
 
 class _LoginSheetState extends State<LoginSheet> {
+  final TextEditingController _account = TextEditingController();
+  final TextEditingController _password = TextEditingController();
   final TextEditingController _token = TextEditingController();
   final TextEditingController _userId = TextEditingController();
   String? _error;
+  bool _savingCredentials = false;
 
   @override
   void dispose() {
+    _account.dispose();
+    _password.dispose();
     _token.dispose();
     _userId.dispose();
     super.dispose();
@@ -781,11 +912,50 @@ class _LoginSheetState extends State<LoginSheet> {
           const Text('登录华为音乐', style: MuyuTheme.section),
           const SizedBox(height: 10),
           const Text(
-            '在应用内浏览器打开华为账号授权页完成扫码，'
-            '授权后自动用 PKCE 换取音乐会话，无需手动抓包。',
+            '本机加密保存账号密码，用于 1 小时自动重登/WebView 自动填充，'
+            '仍需华为 OAuth 授权，不是明文直登。',
             style: MuyuTheme.muted,
           ),
           const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey<String>('login-account'),
+            controller: _account,
+            autocorrect: false,
+            enableSuggestions: false,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: '华为账号',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey<String>('login-password'),
+            controller: _password,
+            obscureText: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(
+              labelText: '密码',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            key: const ValueKey<String>('login-save-oauth'),
+            icon: _savingCredentials
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.lock_outline),
+            label: const Text('保存并自动登录'),
+            onPressed: _savingCredentials ? null : _saveAndOpenOAuth,
+          ),
+          const SizedBox(height: 12),
+          const Divider(),
+          const SizedBox(height: 8),
           FilledButton.icon(
             icon: const Icon(Icons.qr_code_scanner),
             label: const Text('打开内置浏览器扫码登录'),
@@ -827,11 +997,40 @@ class _LoginSheetState extends State<LoginSheet> {
     );
   }
 
-  Future<void> _openOAuth(BuildContext context) async {
+  Future<void> _saveAndOpenOAuth() async {
+    if (_account.text.trim().isEmpty || _password.text.isEmpty) {
+      setState(() => _error = '请先填写华为账号和密码');
+      return;
+    }
+    setState(() {
+      _savingCredentials = true;
+      _error = null;
+    });
+    try {
+      await widget.state.saveHuaweiCredentials(
+        _account.text,
+        _password.text,
+      );
+      if (!mounted) return;
+      setState(() => _savingCredentials = false);
+      await _openOAuth(context, autoFillCredentials: true);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _savingCredentials = false;
+        _error = '保存失败，请重试';
+      });
+    }
+  }
+
+  Future<void> _openOAuth(
+    BuildContext context, {
+    bool autoFillCredentials = false,
+  }) async {
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => OAuthWebViewPage(state: widget.state),
-        fullscreenDialog: true,
+      widget.oauthRouteBuilder(
+        widget.state,
+        autoFillCredentials: autoFillCredentials,
       ),
     );
     // 授权成功后关闭登录面板；取消则保留面板，方便再次尝试或手动填入。
@@ -890,40 +1089,39 @@ class PlaylistDetailPage extends StatelessWidget {
                   ),
                 ],
               )
-            : ListView.builder(
-                padding: const EdgeInsets.only(bottom: 100),
-                itemCount: songs.length + 1,
-                itemBuilder: (context, i) {
-                  if (i == 0) {
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                      child: Row(
-                        children: [
-                          Text('${songs.length} 首歌曲', style: MuyuTheme.muted),
-                          const Spacer(),
-                          FilledButton.icon(
-                            onPressed: () => playSongFromList(
-                              context,
-                              state,
-                              songs.first,
-                              songs,
-                            ),
-                            icon: const Icon(Icons.play_arrow, size: 18),
-                            label: const Text('播放全部'),
+            : Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    child: Row(
+                      children: [
+                        Text('${songs.length} 首歌曲', style: MuyuTheme.muted),
+                        const Spacer(),
+                        FilledButton.icon(
+                          onPressed: () => playSongFromList(
+                            context,
+                            state,
+                            songs.first,
+                            songs,
                           ),
-                        ],
-                      ),
-                    );
-                  }
-                  final song = songs[i - 1];
-                  return SongRow(
-                    song: song,
-                    index: i - 1,
-                    onPlay: () => playSongFromList(context, state, song, songs),
-                    onFavorite: () => state.toggleFavorite(song),
-                    onArtistTap: () => state.openArtistFromSong(song),
-                  );
-                },
+                          icon: const Icon(Icons.play_arrow, size: 18),
+                          label: const Text('播放全部'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: PaginatedSongList(
+                      songs: songs,
+                      padding: const EdgeInsets.only(bottom: 12),
+                      resetKey: playlist.id,
+                      onPlay: (song) =>
+                          playSongFromList(context, state, song, songs),
+                      onFavorite: state.toggleFavorite,
+                      onArtistTap: state.openArtistFromSong,
+                    ),
+                  ),
+                ],
               ),
       ),
     );
@@ -931,12 +1129,18 @@ class PlaylistDetailPage extends StatelessWidget {
 }
 
 /// 歌手详情：歌手名 + 热门歌曲（真实接口）。
-class ArtistDetailPage extends StatelessWidget {
+class ArtistDetailPage extends StatefulWidget {
   const ArtistDetailPage({super.key, required this.state});
   final AppState state;
 
   @override
+  State<ArtistDetailPage> createState() => _ArtistDetailPageState();
+}
+
+class _ArtistDetailPageState extends State<ArtistDetailPage> {
+  @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     final artist = state.activeArtist!;
     final songs = state.artistSongsList;
     return PopScope(
@@ -949,11 +1153,7 @@ class ArtistDetailPage extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.only(bottom: 100),
           children: [
-            if (artist.desc.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(artist.desc, style: MuyuTheme.muted),
-              ),
+            if (artist.desc.isNotEmpty) _ArtistBio(text: artist.desc),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('热门歌曲', style: MuyuTheme.section),
@@ -963,19 +1163,66 @@ class ArtistDetailPage extends StatelessWidget {
                 padding: EdgeInsets.all(18),
                 child: Text('未返回歌曲', style: MuyuTheme.muted),
               ),
-            ...List<Widget>.generate(
-              songs.length,
-              (i) {
-                final song = songs[i];
-                return SongRow(
-                  song: song,
-                  index: i,
-                  onPlay: () => playSongFromList(context, state, song, songs),
-                );
-              },
-            ),
+            if (songs.isNotEmpty)
+              PaginatedSongList(
+                songs: songs,
+                shrinkWrap: true,
+                resetKey: artist.id,
+                onPlay: (song) => playSongFromList(context, state, song, songs),
+              ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 歌手简介默认折叠为 3 行；展开状态只存在于当前 widget。
+/// 用 [SelectionArea] 保留复制全文的能力，不为了折叠删除任何数据。
+class _ArtistBio extends StatefulWidget {
+  const _ArtistBio({required this.text});
+
+  final String text;
+
+  @override
+  State<_ArtistBio> createState() => _ArtistBioState();
+}
+
+class _ArtistBioState extends State<_ArtistBio> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final collapsible = widget.text.length > 80 || widget.text.contains('\n');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SelectionArea(
+            child: Text(
+              widget.text,
+              maxLines: !collapsible || _expanded ? null : 3,
+              overflow: _expanded
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+              style: MuyuTheme.muted,
+            ),
+          ),
+          if (collapsible)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: const ValueKey<String>('artist-bio-toggle'),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                icon: Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                ),
+                label: Text(_expanded ? '收起' : '展开'),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -991,9 +1238,11 @@ class AppearancePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('皮肤与外观')),
-      body: ListView(
+    return AnimatedBuilder(
+      animation: state,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(title: const Text('皮肤与外观')),
+        body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           const Text('主题', style: MuyuTheme.section),
@@ -1012,6 +1261,7 @@ class AppearancePage extends StatelessWidget {
               final p = kMuyuPalettes[i];
               final selected = state.themeIndex == i;
               return GestureDetector(
+                key: ValueKey<String>('appearance-theme-$i'),
                 onTap: () => state.setTheme(i),
                 child: Container(
                   decoration: BoxDecoration(
@@ -1174,8 +1424,9 @@ class AppearancePage extends StatelessWidget {
               );
             }).toList(),
           ),
-          const SizedBox(height: 30),
-        ],
+            const SizedBox(height: 30),
+          ],
+        ),
       ),
     );
   }
@@ -1190,7 +1441,11 @@ class AppearancePage extends StatelessWidget {
       dense: true,
       leading: Icon(icon, color: MuyuColors.accent),
       title: Text(label, style: MuyuTheme.body),
-      trailing: Switch(value: value, onChanged: onChanged),
+      trailing: Switch(
+        key: ValueKey<String>('appearance-switch-$label'),
+        value: value,
+        onChanged: onChanged,
+      ),
     );
   }
 
@@ -1207,6 +1462,7 @@ class AppearancePage extends StatelessWidget {
       leading: Icon(icon, color: MuyuColors.accent),
       title: Text(label, style: MuyuTheme.body),
       trailing: DropdownButton<T>(
+        key: ValueKey<String>('appearance-dropdown-$label'),
         value: value,
         underline: const SizedBox.shrink(),
         items: items
@@ -1303,17 +1559,12 @@ class _FavoriteListState extends State<_FavoriteList> {
         if (songs.isEmpty)
           StatePanel(message: query.isEmpty ? '该平台暂无收藏歌曲' : '没有匹配的歌曲')
         else
-          ...List<Widget>.generate(
-            songs.length,
-            (i) {
-              final song = songs[i];
-              return SongRow(
-                song: song,
-                index: i,
-                onPlay: () =>
-                    playSongFromList(context, widget.state, song, songs),
-              );
-            },
+          PaginatedSongList(
+            songs: songs,
+            shrinkWrap: true,
+            resetKey: query,
+            onPlay: (song) =>
+                playSongFromList(context, widget.state, song, songs),
           ),
       ],
     );
@@ -1379,18 +1630,18 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
               )
             else
               Expanded(
-                child: ListView.separated(
-                  itemCount: songs.length,
+                child: PaginatedList<Song>(
+                  items: songs,
+                  resetKey: songs.length,
                   separatorBuilder: (_, _) =>
                       Divider(height: 1, color: MuyuColors.divider),
-                  itemBuilder: (context, i) {
-                    final song = songs[i];
+                  itemBuilder: (context, index, song) {
                     return ListTile(
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 4,
                         vertical: 4,
                       ),
-                      leading: CoverArt(url: song.cover, size: 44, seed: i),
+                      leading: CoverArt(url: song.cover, size: 44, seed: index),
                       title: Text(
                         song.name,
                         maxLines: 1,

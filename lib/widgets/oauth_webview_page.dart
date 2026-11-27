@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -7,16 +10,36 @@ import '../theme.dart';
 
 /// 应用内浏览器完成华为账号 OAuth 扫码登录。
 ///
-/// 不跳外部浏览器、不用账号密码：授权页在 App 内打开，
+/// 不跳外部浏览器；授权页在 App 内打开。开启 [autoFillCredentials] 时，
+/// 只会把本机保存的账号密码填入华为 OAuth 页面，最终仍需华为授权，
 /// hms://redirect_uri 回调由 NavigationDelegate 拦截，
 /// 随后用 PKCE verifier 换账号 AT，再换音乐 token + snsUserID。
 class OAuthWebViewPage extends StatefulWidget {
-  const OAuthWebViewPage({super.key, required this.state});
+  const OAuthWebViewPage({
+    super.key,
+    required this.state,
+    this.autoFillCredentials = false,
+  });
 
   final AppState state;
+  final bool autoFillCredentials;
 
   @override
   State<OAuthWebViewPage> createState() => _OAuthWebViewPageState();
+}
+
+/// 统一的 OAuth 路由，便于登录面板和启动自动重登共用同一入口。
+MaterialPageRoute<bool> huaweiOAuthRoute(
+  AppState state, {
+  bool autoFillCredentials = false,
+}) {
+  return MaterialPageRoute<bool>(
+    builder: (_) => OAuthWebViewPage(
+      state: state,
+      autoFillCredentials: autoFillCredentials,
+    ),
+    fullscreenDialog: true,
+  );
 }
 
 class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
@@ -27,6 +50,8 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
   bool _loading = true;
   bool _exchanging = false;
   String? _error;
+  int _autoFillAttempts = 0;
+  bool _autoFillErrorShown = false;
 
   @override
   void initState() {
@@ -44,6 +69,7 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
           onPageFinished: (url) {
             if (_intercept(url)) return;
             _setLoading(false);
+            unawaited(_autoFillIfNeeded());
           },
           onNavigationRequest: (request) {
             if (_intercept(request.url)) return NavigationDecision.prevent;
@@ -61,6 +87,97 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
   void _setLoading(bool value) {
     if (!mounted || _loading == value) return;
     setState(() => _loading = value);
+  }
+
+  Future<void> _autoFillIfNeeded() async {
+    if (!widget.autoFillCredentials ||
+        _settled ||
+        _exchanging ||
+        _autoFillAttempts >= 3) {
+      return;
+    }
+    final credentials = widget.state.savedHuaweiCredentials;
+    if (credentials == null) {
+      _showAutoFillFailure();
+      return;
+    }
+    _autoFillAttempts++;
+    final script = _autoFillScript(credentials.account, credentials.password);
+    try {
+      final result = await _controller.runJavaScriptReturningResult(script);
+      final text = '$result';
+      if (!text.contains('"filledPassword":true') &&
+          !text.contains('filledPassword: true')) {
+        if (_autoFillAttempts >= 3) _showAutoFillFailure();
+      }
+    } catch (_) {
+      _showAutoFillFailure();
+    }
+  }
+
+  void _showAutoFillFailure() {
+    if (!mounted || _autoFillErrorShown) return;
+    _autoFillErrorShown = true;
+    setState(() {
+      _error = '自动填充未完成，请手动完成验证/登录';
+    });
+  }
+
+  /// 账号密码只用 [jsonEncode] 注入脚本，不写日志，也不拼接到异常文本。
+  String _autoFillScript(String account, String password) {
+    final accountJson = jsonEncode(account);
+    final passwordJson = jsonEncode(password);
+    return '''
+(function () {
+  const account = $accountJson;
+  const password = $passwordJson;
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      el.getClientRects().length > 0 && !el.disabled && !el.readOnly;
+  };
+  const setValue = (el, value) => {
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    setter ? setter.call(el, value) : (el.value = value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const inputs = Array.from(document.querySelectorAll('input')).filter(visible);
+  const passwordInput = inputs.find((el) => el.type === 'password');
+  const accountInput = inputs.find((el) =>
+    ['text', 'email', 'tel', 'number', ''].includes(el.type) &&
+    !el.value &&
+    /(account|user|email|phone|mobile|login|账号|手机|邮箱)/i.test(
+      [el.name, el.id, el.placeholder, el.autocomplete].join(' ')
+    )
+  ) || inputs.find((el) => ['text', 'email', 'tel', 'number'].includes(el.type));
+  if (accountInput && account) setValue(accountInput, account);
+  if (passwordInput && password) setValue(passwordInput, password);
+  const targetInput = passwordInput || accountInput;
+  if (targetInput) {
+    const scope = targetInput.closest('form') ||
+      targetInput.parentElement?.parentElement || document;
+    const candidates = Array.from(scope.querySelectorAll(
+      'button[type=submit],input[type=submit],button'
+    ));
+    const button = candidates.find((el) =>
+      /(login|log in|sign in|next|continue|登录|下一步|继续)/i.test(
+        (el.textContent || el.value || '').trim()
+      )
+    ) || candidates.find((el) =>
+      el.type === 'submit' || el.tagName === 'BUTTON'
+    );
+    if (button) setTimeout(() => button.click(), 350);
+  }
+  return JSON.stringify({
+    filledAccount: !!accountInput,
+    filledPassword: !!passwordInput
+  });
+})();
+''';
   }
 
   /// 返回 true 表示已拦截（授权回调），调用方必须阻止继续导航。
@@ -87,6 +204,7 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
     try {
       await widget.state.api.signInWithCode(callback.code, _attempt.verifier);
       if (!mounted) return;
+      widget.state.clearReloginRequest();
       widget.state.refresh();
       // 登录成功必须绕过 990000 的 30 秒冷却，真正重新拉首页。
       await widget.state.refreshHome(force: true);
@@ -116,6 +234,8 @@ class _OAuthWebViewPageState extends State<OAuthWebViewPage> {
       _error = null;
       _exchanging = false;
       _loading = true;
+      _autoFillAttempts = 0;
+      _autoFillErrorShown = false;
     });
     _controller.loadRequest(_attempt.authorizeUri);
   }

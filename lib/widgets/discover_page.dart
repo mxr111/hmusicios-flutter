@@ -45,14 +45,10 @@ class DiscoverPage extends StatelessWidget {
         const SizedBox(height: 12),
         if (data.playlists.isEmpty)
           _empty('华为接口未返回推荐歌单', pal)
-          else
+        else
           _playlistRow(context, data.playlists, pal),
         const SizedBox(height: 26),
-        _sectionTitle(
-          '华为音乐榜单',
-          data.charts.isEmpty ? '暂无数据' : '点击榜单进入歌单',
-          pal,
-        ),
+        _sectionTitle('华为音乐榜单', data.charts.isEmpty ? '暂无数据' : '点击榜单进入歌单', pal),
         const SizedBox(height: 12),
         if (data.charts.isEmpty)
           _empty('华为接口未返回榜单', pal)
@@ -65,11 +61,18 @@ class DiscoverPage extends StatelessWidget {
   Widget _titleRow(BuildContext context, MuyuPalette pal) {
     return Row(
       children: [
-        Text('音乐厅',
-            style: TextStyle(
-                fontSize: 22, fontWeight: FontWeight.w700, color: pal.text)),
+        Text(
+          '音乐厅',
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            color: pal.text,
+          ),
+        ),
         const SizedBox(width: 10),
-        const SourceBadge(compact: true),
+        const SourceBadge(
+          key: ValueKey<String>('discover-source-badge'),
+        ),
         const Spacer(),
         IconButton(
           icon: const Icon(Icons.refresh),
@@ -90,9 +93,14 @@ class DiscoverPage extends StatelessWidget {
   Widget _sectionTitle(String title, String action, MuyuPalette pal) {
     return Row(
       children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 17, fontWeight: FontWeight.w700, color: pal.text)),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            color: pal.text,
+          ),
+        ),
         const Spacer(),
         Text(action, style: TextStyle(fontSize: 12, color: pal.muted)),
       ],
@@ -150,18 +158,15 @@ class DiscoverPage extends StatelessWidget {
     MuyuPalette pal,
     bool wide,
   ) {
-    return GridView.builder(
+    return PaginatedGrid<Playlist>(
+      items: charts,
+      pageSize: 12,
       shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: wide ? 4 : 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: wide ? 2.2 : 1.9,
-      ),
-      itemCount: charts.length,
-      itemBuilder: (context, i) {
-        final chart = charts[i];
+      crossAxisCount: wide ? 4 : 2,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: wide ? 2.2 : 1.9,
+      itemBuilder: (context, index, chart) {
         return InkWell(
           onTap: () => _openChart(context, chart),
           borderRadius: BorderRadius.circular(14),
@@ -179,7 +184,12 @@ class DiscoverPage extends StatelessWidget {
             padding: const EdgeInsets.all(10),
             child: Row(
               children: [
-                CoverArt(url: chart.cover, size: 58, radius: 10, seed: i + 3),
+                CoverArt(
+                  url: chart.cover,
+                  size: 58,
+                  radius: 10,
+                  seed: index + 3,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -191,9 +201,10 @@ class DiscoverPage extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: pal.text),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: pal.text,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -261,8 +272,10 @@ class DiscoverPage extends StatelessWidget {
             const SizedBox(height: 6),
             Text(message, style: TextStyle(fontSize: 12, color: pal.muted)),
             const SizedBox(height: 2),
-            const Text('点击刷新重试',
-                style: TextStyle(fontSize: 11, color: MuyuColors.accent)),
+            const Text(
+              '点击刷新重试',
+              style: TextStyle(fontSize: 11, color: MuyuColors.accent),
+            ),
           ],
         ),
       ),
